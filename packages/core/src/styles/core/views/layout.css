@@ -1867,6 +1867,11 @@
     border-color: #1e2938;
   }
 
+  .dark .df-year-day-cell {
+    border-right-color: var(--df-color-border);
+    border-bottom-color: var(--df-color-border);
+  }
+
   .dark .df-year-fixed-corner,
   .dark .df-year-fixed-week-header,
   .dark .df-year-fixed-week-spacer,

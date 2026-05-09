@@ -566,7 +566,8 @@ export const TimeGrid = ({
                           dayIndex,
                           getGridHour(e.clientY),
                           isTouch,
-                          handleCreateStart
+                          handleCreateStart,
+                          isSlidingView
                         );
                       }}
                       onDblClick={e => {

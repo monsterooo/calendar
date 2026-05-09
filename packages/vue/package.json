@@ -1,6 +1,6 @@
 {
   "name": "@dayflow/vue",
-  "version": "3.6.1",
+  "version": "3.6.2",
   "description": "Vue adapter for DayFlow calendar",
   "files": [
     "dist",

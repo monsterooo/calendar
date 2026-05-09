@@ -37,6 +37,7 @@ interface YearRowComponentProps {
   onContextMenu: (menu: { x: number; y: number; date: Date } | null) => void;
   appTimeZone?: string;
   dragPreviewEvent?: Event | null;
+  isMobile?: boolean;
 }
 
 const eventOverlapsRow = (
@@ -148,6 +149,7 @@ export const YearRowComponent = memo(
     onContextMenu,
     appTimeZone,
     dragPreviewEvent,
+    isMobile,
   }: YearRowComponentProps) => {
     const MAX_VISIBLE_ROWS = 3;
     const HEADER_HEIGHT = 26;
@@ -378,7 +380,7 @@ export const YearRowComponent = memo(
                   }
                   selectedEventId={selectedEventId}
                   onMoveStart={onMoveStart}
-                  onResizeStart={onResizeStart}
+                  onResizeStart={isMobile ? undefined : onResizeStart}
                   onEventSelect={onEventSelect}
                   onDetailPanelToggle={onDetailPanelToggle}
                   newlyCreatedEventId={newlyCreatedEventId}
@@ -393,6 +395,8 @@ export const YearRowComponent = memo(
                   onEventUpdate={handleEventUpdate}
                   onEventDelete={handleEventDelete}
                   appTimeZone={appTimeZone}
+                  isMobile={isMobile}
+                  enableTouch={isMobile}
                 />
               </div>
             ))}
@@ -444,7 +448,8 @@ export const YearRowComponent = memo(
       prevProps.onDetailPanelToggle === nextProps.onDetailPanelToggle &&
       prevProps.useEventDetailPanel === nextProps.useEventDetailPanel &&
       prevProps.onContextMenu === nextProps.onContextMenu &&
-      prevProps.appTimeZone === nextProps.appTimeZone
+      prevProps.appTimeZone === nextProps.appTimeZone &&
+      prevProps.isMobile === nextProps.isMobile
     );
   }
 );

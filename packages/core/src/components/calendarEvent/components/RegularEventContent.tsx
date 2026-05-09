@@ -34,6 +34,8 @@ interface RegularEventContentProps {
   isEditable: boolean;
   isTouchEnabled: boolean;
   isEventSelected: boolean;
+  isBeingDragged?: boolean;
+  isBeingResized?: boolean;
   onResizeStart?: (
     e: MouseEvent | TouchEvent,
     event: Event,
@@ -55,6 +57,8 @@ const RegularEventContent = ({
   isEditable,
   isTouchEnabled,
   isEventSelected,
+  isBeingDragged,
+  isBeingResized,
   onResizeStart,
   timeFormat = '24h',
   resizeHandleOrientation = 'vertical',
@@ -126,6 +130,7 @@ const RegularEventContent = ({
               <div
                 className={resizeHandleTop}
                 onMouseDown={e => onResizeStart(e, event, 'top')}
+                onClick={e => e.stopPropagation()}
               />
             )}
             {/* Only show bottom resize handle on the last segment */}
@@ -133,6 +138,7 @@ const RegularEventContent = ({
               <div
                 className={resizeHandleBottom}
                 onMouseDown={e => onResizeStart(e, event, 'bottom')}
+                onClick={e => e.stopPropagation()}
               />
             )}
             {/* Right resize handle for multi-day events (only on the last segment) */}
@@ -155,6 +161,8 @@ const RegularEventContent = ({
 
       {isTouchEnabled &&
         isEventSelected &&
+        !isBeingDragged &&
+        !isBeingResized &&
         onResizeStart &&
         isEditable &&
         resizeHandleOrientation === 'vertical' && (

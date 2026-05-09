@@ -73,6 +73,10 @@ export const FixedWeekYearView = ({
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
   const [scrollbarHeight, setScrollbarHeight] = useState(0);
 
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window === 'undefined' ? false : window.innerWidth < 768
+  );
+
   // State for event selection and detail panel
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(
     null
@@ -144,6 +148,12 @@ export const FixedWeekYearView = ({
     if (isEditable) return;
     setContextMenu(null);
   }, [isEditable]);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Click outside handler
   useEffect(() => {
@@ -286,6 +296,7 @@ export const FixedWeekYearView = ({
       onEventEdit: event => {
         setNewlyCreatedEventId(event.id);
       },
+      isMobile,
     });
   const yearDragState = dragState as MonthEventDragState;
 
@@ -604,6 +615,7 @@ export const FixedWeekYearView = ({
               useEventDetailPanel={useEventDetailPanel}
               onContextMenu={handleContextMenu}
               appTimeZone={appTimeZone}
+              isMobile={isMobile}
             />
           ))}
         </div>

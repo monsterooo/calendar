@@ -559,6 +559,7 @@ export const DefaultYearView = ({
               useEventDetailPanel={useEventDetailPanel}
               onContextMenu={handleRowContextMenu}
               appTimeZone={appTimeZone}
+              isMobile={isMobile}
             />
           ))}
         </div>

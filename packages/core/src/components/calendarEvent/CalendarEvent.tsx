@@ -117,6 +117,12 @@ const CalendarEvent = ({
   const detailPanelRef = useRef<HTMLDivElement>(null);
   const selectedEventElementRef = useRef<HTMLDivElement | null>(null);
   const selectedDayIndexRef = useRef<number | null>(null);
+  // Suppress click after a mouse-initiated resize (prevents detail drawer from
+  // opening when mouseup triggers a click on the CalendarEvent element)
+  const mouseResizeActiveRef = useRef(false);
+  const mouseResizeClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   const detailPanelKey =
     isMultiDay && segment
@@ -145,6 +151,7 @@ const CalendarEvent = ({
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,
+    handleTouchCancel,
     shouldSuppressClick,
   } = useEventInteraction({
     event,
@@ -165,6 +172,31 @@ const CalendarEvent = ({
   const [eventVisibility, setEventVisibility] = useState<
     'standard' | 'sticky-top' | 'sticky-bottom' | 'sticky-left' | 'sticky-right'
   >('standard');
+
+  // Suppress the click that fires after a mouse-based resize (mousedown → drag → mouseup)
+  // so the detail drawer doesn't open when the user resizes via mouse on small-width desktops.
+  const wrappedOnResizeStart = useCallback(
+    (e: MouseEvent | TouchEvent, ev: Event, direction: string) => {
+      if (!('touches' in e)) {
+        // Mouse resize: the browser will fire a click after mouseup, suppress it.
+        mouseResizeActiveRef.current = true;
+        if (mouseResizeClearTimerRef.current)
+          clearTimeout(mouseResizeClearTimerRef.current);
+        // Clear AFTER the click event has fired (setTimeout 0 defers past click).
+        document.addEventListener(
+          'mouseup',
+          () => {
+            mouseResizeClearTimerRef.current = setTimeout(() => {
+              mouseResizeActiveRef.current = false;
+            }, 0);
+          },
+          { once: true }
+        );
+      }
+      onResizeStart?.(e, ev, direction);
+    },
+    [onResizeStart]
+  );
 
   // Utility Wrappers
   const setActiveDayIndex = (dayIndex: number | null) => {
@@ -478,8 +510,21 @@ const CalendarEvent = ({
                   color: getEventTextColor(calendarId, calendarRegistry),
                 }),
           ...styleOverride,
+          // Prevent the browser from handling this touch as a scroll or zoom
+          // gesture. CSS touch-action is evaluated before any JS runs, so it
+          // is far more reliable than e.preventDefault() in a touchstart
+          // handler for stopping the scroll container from claiming the touch.
+          // Only applied when the event is draggable on a touch-enabled screen.
+          ...(isTouchEnabled && isDraggable ? { touchAction: 'none' } : {}),
         }}
         onClick={e => {
+          // Suppress click that fires after a mouse-based resize
+          if (mouseResizeActiveRef.current) {
+            mouseResizeActiveRef.current = false;
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
           if (isTouchEnabled && shouldSuppressClick()) {
             e.preventDefault();
             e.stopPropagation();
@@ -519,6 +564,7 @@ const CalendarEvent = ({
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
       >
         <EventContent
           event={visualEvent}
@@ -541,7 +587,7 @@ const CalendarEvent = ({
           isSlidingView={isSlidingView}
           app={app}
           onMoveStart={onMoveStart}
-          onResizeStart={onResizeStart}
+          onResizeStart={wrappedOnResizeStart}
           multiDaySegmentInfo={multiDaySegmentInfo}
           customRenderingStore={customRenderingStore}
           eventContentSlotArgs={eventContentSlotArgs}

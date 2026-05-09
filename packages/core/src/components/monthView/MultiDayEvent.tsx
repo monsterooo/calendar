@@ -145,6 +145,8 @@ export const MultiDayEvent = memo(
     const handleTouchStart = (e: TouchEvent) => {
       if (!onMoveStart || !isMobile || (!isDraggable && !viewable)) return;
       e.stopPropagation();
+      // Prevent browser scroll/pan gesture so touchmove stays cancelable during drag
+      if (isDraggable) e.preventDefault();
       setIsPressed(true);
 
       const touch = e.touches[0];
@@ -403,6 +405,9 @@ export const MultiDayEvent = memo(
                   color: getEventTextColor(calendarId),
                 }),
           cursor: isDraggable ? 'pointer' : viewable ? 'pointer' : 'default',
+          // Prevent browser scroll/zoom gestures on draggable multi-day events
+          // on touch screens — CSS touch-action is resolved before JS runs.
+          ...(isMobile && isDraggable ? { touchAction: 'none' } : {}),
         }}
         data-all-day={String(!!visualEvent.allDay)}
         data-selected={String(isSelected)}
@@ -419,34 +424,6 @@ export const MultiDayEvent = memo(
         onTouchEnd={handleTouchEnd}
         title={`${visualEvent.title} (${formatDateConsistent(visualEvent.start)} - ${formatDateConsistent(visualEvent.end)})`}
       >
-        {isMobile && isSelected && isEditable && (
-          <>
-            {segment.isFirstSegment && (
-              <div
-                className='df-event-touch-resize-indicator'
-                data-axis='horizontal'
-                data-position='left'
-                style={{ borderColor: getLineColor(calendarId) }}
-                onTouchStart={e => {
-                  e.stopPropagation();
-                  onResizeStart?.(e, segment.event, 'left');
-                }}
-              />
-            )}
-            {segment.isLastSegment && (
-              <div
-                className='df-event-touch-resize-indicator'
-                data-axis='horizontal'
-                data-position='right'
-                style={{ borderColor: getLineColor(calendarId) }}
-                onTouchStart={e => {
-                  e.stopPropagation();
-                  onResizeStart?.(e, segment.event, 'right');
-                }}
-              />
-            )}
-          </>
-        )}
         {renderResizeHandle('left')}
         <div
           className='df-month-segment-event-body'

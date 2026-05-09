@@ -37,6 +37,7 @@ export const applyGlobalDragCursor = (
 
 export const clearGlobalDragCursor = () => {
   document.body.style.cursor = '';
+  document.body.style.touchAction = '';
   document.body.classList.remove(
     'df-drag-active',
     'df-cursor-ns-resize',
@@ -47,7 +48,8 @@ export const clearGlobalDragCursor = () => {
 
 export const addDocumentDragListeners = (
   moveHandler: (e: MouseEvent | TouchEvent) => void,
-  endHandler: (e: MouseEvent | TouchEvent) => void
+  endHandler: (e: MouseEvent | TouchEvent) => void,
+  cancelHandler?: () => void
 ) => {
   document.addEventListener('mousemove', moveHandler);
   document.addEventListener('mouseup', endHandler);
@@ -56,11 +58,15 @@ export const addDocumentDragListeners = (
     passive: false,
   });
   document.addEventListener('touchend', endHandler);
+  if (cancelHandler) {
+    document.addEventListener('touchcancel', cancelHandler);
+  }
 };
 
 export const removeDocumentDragListeners = (
   moveHandler: (e: MouseEvent | TouchEvent) => void,
-  endHandler: (e: MouseEvent | TouchEvent) => void
+  endHandler: (e: MouseEvent | TouchEvent) => void,
+  cancelHandler?: () => void
 ) => {
   document.removeEventListener('mousemove', moveHandler);
   document.removeEventListener('mouseup', endHandler);
@@ -68,4 +74,7 @@ export const removeDocumentDragListeners = (
     capture: true,
   });
   document.removeEventListener('touchend', endHandler);
+  if (cancelHandler) {
+    document.removeEventListener('touchcancel', cancelHandler);
+  }
 };

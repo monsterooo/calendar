@@ -141,4 +141,113 @@ describe('CalendarEvent style contract', () => {
     expect(onDetailPanelToggle).toHaveBeenCalledWith(null);
     expect(onDetailPanelToggle).not.toHaveBeenCalledWith('event-1');
   });
+
+  it('keeps long-press drag active through small finger drift and blocks follow-up scrolling', () => {
+    jest.useFakeTimers();
+    try {
+      const calendarElement = document.createElement('div');
+      const calendarRef = { current: calendarElement };
+      const onMoveStart = jest.fn();
+
+      const timedEvent: Event = {
+        ...baseEvent,
+        allDay: false,
+        start: Temporal.ZonedDateTime.from('2026-04-09T09:00:00+00:00[UTC]'),
+        end: Temporal.ZonedDateTime.from('2026-04-09T10:00:00+00:00[UTC]'),
+      };
+
+      const { container } = render(
+        <CalendarEvent
+          event={timedEvent}
+          viewType={ViewType.YEAR}
+          calendarRef={calendarRef}
+          hourHeight={60}
+          firstHour={0}
+          onMoveStart={onMoveStart}
+          onEventUpdate={jest.fn()}
+          onEventDelete={jest.fn()}
+          isMobile
+          enableTouch
+        />
+      );
+
+      const eventElement = container.querySelector(
+        '[data-event-id="event-1"]'
+      ) as HTMLDivElement | null;
+
+      const touchStartEvent = new TouchEvent('touchstart', {
+        bubbles: true,
+        cancelable: true,
+        touches: [
+          {
+            identifier: 1,
+            target: eventElement!,
+            clientX: 24,
+            clientY: 24,
+            pageX: 24,
+            pageY: 24,
+            screenX: 24,
+            screenY: 24,
+            radiusX: 1,
+            radiusY: 1,
+            rotationAngle: 0,
+            force: 1,
+          } as unknown as Touch,
+        ],
+      });
+      eventElement?.dispatchEvent(touchStartEvent);
+
+      const driftMoveEvent = new TouchEvent('touchmove', {
+        bubbles: true,
+        cancelable: true,
+        touches: [
+          {
+            identifier: 1,
+            target: eventElement!,
+            clientX: 35,
+            clientY: 35,
+            pageX: 35,
+            pageY: 35,
+            screenX: 35,
+            screenY: 35,
+            radiusX: 1,
+            radiusY: 1,
+            rotationAngle: 0,
+            force: 1,
+          } as unknown as Touch,
+        ],
+      });
+      eventElement?.dispatchEvent(driftMoveEvent);
+
+      jest.advanceTimersByTime(500);
+
+      expect(onMoveStart).toHaveBeenCalledTimes(1);
+
+      const dragMoveEvent = new TouchEvent('touchmove', {
+        bubbles: true,
+        cancelable: true,
+        touches: [
+          {
+            identifier: 1,
+            target: eventElement!,
+            clientX: 60,
+            clientY: 60,
+            pageX: 60,
+            pageY: 60,
+            screenX: 60,
+            screenY: 60,
+            radiusX: 1,
+            radiusY: 1,
+            rotationAngle: 0,
+            force: 1,
+          } as unknown as Touch,
+        ],
+      });
+      eventElement?.dispatchEvent(dragMoveEvent);
+
+      expect(dragMoveEvent.defaultPrevented).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

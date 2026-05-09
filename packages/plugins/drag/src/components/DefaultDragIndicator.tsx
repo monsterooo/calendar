@@ -112,22 +112,6 @@ export const DefaultDragIndicatorRenderer: DragIndicatorRenderer = {
             </div>
           )}
         </div>
-        {isMobile && (
-          <>
-            <div
-              className='df-event-touch-resize-indicator'
-              data-axis='vertical'
-              data-position='top'
-              style={{ color: lineColors[0] || getLineColor('blue') }}
-            />
-            <div
-              className='df-event-touch-resize-indicator'
-              data-axis='vertical'
-              data-position='bottom'
-              style={{ color: lineColors[0] || getLineColor('blue') }}
-            />
-          </>
-        )}
       </div>
     );
   },

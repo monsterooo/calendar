@@ -1,3 +1,13 @@
+/* Mobile drag-over highlight: applied directly to [data-date] cells via DOM
+   on mobile to avoid setState re-renders that would freeze the drag animation */
+[data-date][data-drag-over='true'] {
+  background-color: color-mix(
+    in srgb,
+    var(--df-color-primary, #3b82f6) 12%,
+    var(--df-color-background, #fff)
+  ) !important;
+}
+
 /* ── DayFlow Plugin – Drag Indicator ────────────────────────────────────── */
 
 @layer components {

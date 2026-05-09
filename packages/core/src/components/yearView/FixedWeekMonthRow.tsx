@@ -48,6 +48,7 @@ interface FixedWeekMonthRowProps {
   useEventDetailPanel?: boolean;
   onContextMenu: (e: MouseEvent, date: Date) => void;
   appTimeZone?: string;
+  isMobile?: boolean;
 }
 
 export const FixedWeekMonthRow = memo(
@@ -76,6 +77,7 @@ export const FixedWeekMonthRow = memo(
     useEventDetailPanel,
     onContextMenu,
     appTimeZone,
+    isMobile,
   }: FixedWeekMonthRowProps) => {
     const today = useMemo(() => {
       const now = getTodayInTimeZone(appTimeZone);
@@ -208,7 +210,7 @@ export const FixedWeekMonthRow = memo(
                     }
                     selectedEventId={selectedEventId}
                     onMoveStart={onMoveStart}
-                    onResizeStart={onResizeStart}
+                    onResizeStart={isMobile ? undefined : onResizeStart}
                     onEventSelect={onEventSelect}
                     onDetailPanelToggle={onDetailPanelToggle}
                     newlyCreatedEventId={newlyCreatedEventId}
@@ -222,6 +224,8 @@ export const FixedWeekMonthRow = memo(
                     onEventUpdate={handleEventUpdate}
                     onEventDelete={handleEventDelete}
                     appTimeZone={appTimeZone}
+                    isMobile={isMobile}
+                    enableTouch={isMobile}
                   />
                 </div>
               ))}
@@ -282,7 +286,8 @@ export const FixedWeekMonthRow = memo(
       prevProps.customEventDetailDialog === nextProps.customEventDetailDialog &&
       prevProps.useEventDetailPanel === nextProps.useEventDetailPanel &&
       prevProps.onContextMenu === nextProps.onContextMenu &&
-      prevProps.appTimeZone === nextProps.appTimeZone
+      prevProps.appTimeZone === nextProps.appTimeZone &&
+      prevProps.isMobile === nextProps.isMobile
     );
   }
 );

@@ -43,11 +43,16 @@ export const useEventInteraction = ({
   const [isPressed, setIsPressed] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const latestTouchPosRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTriggeredRef = useRef(false);
   const suppressClickUntilRef = useRef(0);
+  const LONG_PRESS_DELAY_MS = 500;
+  const LONG_PRESS_MOVE_TOLERANCE_PX = 14;
 
   const handleTouchStart = (e: TouchEvent) => {
     if (!onMoveStart || !isTouchEnabled) return;
     e.stopPropagation();
+    e.preventDefault();
     setIsPressed(true);
 
     const touch = e.touches[0];
@@ -56,8 +61,15 @@ export const useEventInteraction = ({
     const currentTarget = e.currentTarget as HTMLElement;
 
     touchStartPosRef.current = { x: clientX, y: clientY };
+    latestTouchPosRef.current = { x: clientX, y: clientY };
+    longPressTriggeredRef.current = false;
 
     longPressTimerRef.current = setTimeout(() => {
+      const latestTouch = latestTouchPosRef.current ?? {
+        x: clientX,
+        y: clientY,
+      };
+
       if (onEventLongPress) {
         onEventLongPress(event.id);
       } else {
@@ -72,9 +84,11 @@ export const useEventInteraction = ({
           /* noop */
         },
         currentTarget: currentTarget,
-        touches: [{ clientX, clientY }],
+        touches: [{ clientX: latestTouch.x, clientY: latestTouch.y }],
         cancelable: false,
       } as unknown as MouseEvent | TouchEvent;
+
+      longPressTriggeredRef.current = true;
 
       if (multiDaySegmentInfo) {
         const adjustedEvent = {
@@ -105,20 +119,40 @@ export const useEventInteraction = ({
       }
 
       suppressClickUntilRef.current = Date.now() + 400;
-    }, 500);
+    }, LONG_PRESS_DELAY_MS);
   };
 
   const handleTouchMove = (e: TouchEvent) => {
+    const touch = e.touches[0];
+    if (touch) {
+      latestTouchPosRef.current = {
+        x: touch.clientX,
+        y: touch.clientY,
+      };
+    }
+
+    if (longPressTriggeredRef.current) {
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+      e.stopPropagation();
+      return;
+    }
+
     if (isTouchEnabled) {
       e.stopPropagation();
     }
     if (longPressTimerRef.current && touchStartPosRef.current) {
-      const dx = Math.abs(e.touches[0].clientX - touchStartPosRef.current.x);
-      const dy = Math.abs(e.touches[0].clientY - touchStartPosRef.current.y);
-      if (dx > 10 || dy > 10) {
+      const dx = Math.abs((touch?.clientX ?? 0) - touchStartPosRef.current.x);
+      const dy = Math.abs((touch?.clientY ?? 0) - touchStartPosRef.current.y);
+      if (
+        dx > LONG_PRESS_MOVE_TOLERANCE_PX ||
+        dy > LONG_PRESS_MOVE_TOLERANCE_PX
+      ) {
         clearTimeout(longPressTimerRef.current);
         longPressTimerRef.current = null;
         touchStartPosRef.current = null;
+        latestTouchPosRef.current = null;
         setIsPressed(false);
       }
     }
@@ -129,6 +163,13 @@ export const useEventInteraction = ({
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
+    }
+
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      touchStartPosRef.current = null;
+      latestTouchPosRef.current = null;
+      return;
     }
 
     if (isTouchEnabled && touchStartPosRef.current) {
@@ -159,6 +200,18 @@ export const useEventInteraction = ({
     }
 
     touchStartPosRef.current = null;
+    latestTouchPosRef.current = null;
+  };
+
+  const handleTouchCancel = () => {
+    setIsPressed(false);
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartPosRef.current = null;
+    latestTouchPosRef.current = null;
+    longPressTriggeredRef.current = false;
   };
 
   return {
@@ -169,6 +222,7 @@ export const useEventInteraction = ({
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,
+    handleTouchCancel,
     shouldSuppressClick: () => Date.now() < suppressClickUntilRef.current,
   };
 };

@@ -245,17 +245,39 @@ export const useDragHandlers = (
       drag.originalEndDate = new Date(previewUpdate.endDate.getTime());
       drag.targetDate = new Date(previewUpdate.targetDate.getTime());
 
-      setDragState(prev => {
-        if ('targetDate' in prev) {
-          return {
-            ...prev,
-            targetDate: previewUpdate.targetDate,
-            startDate: previewUpdate.startDate,
-            endDate: previewUpdate.endDate,
-          } as MonthDragState;
+      if (options.isMobile) {
+        // On mobile, setDragState triggers a full re-render of the calendar
+        // which blocks the UI thread long enough to freeze the drag indicator.
+        // Instead, highlight the target cell directly in the DOM — no re-render.
+        const calendarEl = options.calendarRef?.current;
+        if (calendarEl) {
+          calendarEl
+            .querySelectorAll<HTMLElement>('[data-drag-over]')
+            .forEach(el => {
+              delete el.dataset.dragOver;
+            });
+          const d = previewUpdate.targetDate;
+          const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          const targetEl = calendarEl.querySelector<HTMLElement>(
+            `[data-date="${dateStr}"]`
+          );
+          if (targetEl) {
+            targetEl.dataset.dragOver = 'true';
+          }
         }
-        return prev;
-      });
+      } else {
+        setDragState(prev => {
+          if ('targetDate' in prev) {
+            return {
+              ...prev,
+              targetDate: previewUpdate.targetDate,
+              startDate: previewUpdate.startDate,
+              endDate: previewUpdate.endDate,
+            } as MonthDragState;
+          }
+          return prev;
+        });
+      }
 
       const isAllDay = drag.originalEvent?.allDay || false;
       const newStartTemporal = isAllDay
@@ -917,6 +939,15 @@ export const useDragHandlers = (
 
       clearGlobalDragCursor();
 
+      // Remove mobile DOM drag-over highlights (if any were applied)
+      if (isDateGridView && options.isMobile) {
+        options.calendarRef?.current
+          ?.querySelectorAll<HTMLElement>('[data-drag-over]')
+          .forEach(el => {
+            delete el.dataset.dragOver;
+          });
+      }
+
       // If dragging but threshold not met (indicator not visible), treat as click/cancel
       if (
         (drag.mode === 'move' || drag.mode === 'create') &&
@@ -1212,6 +1243,37 @@ export const useDragHandlers = (
     ]
   );
 
+  // Touch cancel handler — cleans up drag state without applying a drop.
+  const handleDragCancel = useCallback(() => {
+    const drag = dragRef.current as typeof dragRef.current & InternalDragRef;
+    if (!drag || (!drag.active && !drag.pendingMove)) return;
+
+    clearGlobalDragCursor();
+
+    if (isDateGridView && options.isMobile) {
+      options.calendarRef?.current
+        ?.querySelectorAll<HTMLElement>('[data-drag-over]')
+        .forEach(el => {
+          delete el.dataset.dragOver;
+        });
+    }
+
+    removeDragIndicator();
+    removeDocumentDragListeners(
+      handleDragMove,
+      handleDragEnd,
+      handleDragCancel
+    );
+    resetDragState();
+  }, [
+    isDateGridView,
+    dragRef,
+    handleDragMove,
+    handleDragEnd,
+    removeDragIndicator,
+    resetDragState,
+  ]);
+
   // Move event start - complete version
   const handleMoveStart = useCallback(
     (e: MouseEvent | TouchEvent, event: Event) => {
@@ -1287,7 +1349,26 @@ export const useDragHandlers = (
         drag.indicatorVisible = false;
 
         buildDateCellCache();
-        addDocumentDragListeners(handleDragMove, handleDragEnd);
+        // Prevent the browser's compositor from intercepting touch for scroll
+        // during drag; cleared in clearGlobalDragCursor on drag end.
+        if (isTouchLikeEvent(e)) document.body.style.touchAction = 'none';
+
+        if (isTouchLikeEvent(e)) {
+          createDragIndicator(
+            drag,
+            drag.originalEvent?.calendarId,
+            drag.originalEvent?.title,
+            null,
+            sourceElement || undefined
+          );
+          drag.indicatorVisible = true;
+        }
+
+        addDocumentDragListeners(
+          handleDragMove,
+          handleDragEnd,
+          handleDragCancel
+        );
       } else {
         // Week/Day view move start
         const mouseHour = pixelYToHour(clientY);
@@ -1311,15 +1392,18 @@ export const useDragHandlers = (
         drag.indicatorVisible = false;
 
         // Week/Day view uses cross-region drag support
+        if (isTouchLikeEvent(e)) document.body.style.touchAction = 'none';
         addDocumentDragListeners(
           handleUniversalDragMove,
-          handleUniversalDragEnd
+          handleUniversalDragEnd,
+          handleDragCancel
         );
       }
     },
     [
       isDateGridView,
       createDragIndicator,
+      handleDragCancel,
       handleDragEnd,
       handleDragMove,
       handleUniversalDragMove,
@@ -1422,12 +1506,14 @@ export const useDragHandlers = (
         setDragState(weekDayDragState);
       }
 
-      addDocumentDragListeners(handleDragMove, handleDragEnd);
+      if (isTouchLikeEvent(e)) document.body.style.touchAction = 'none';
+      addDocumentDragListeners(handleDragMove, handleDragEnd, handleDragCancel);
     },
     [
       isDateGridView,
       handleDragMove,
       handleDragEnd,
+      handleDragCancel,
       pixelYToHour,
       dragRef,
       setDragState,
