@@ -1,3 +1,5 @@
+import type { CalendarType, Event } from '@dayflow/core';
+
 import type {
   GoogleCalendarList,
   GoogleCalendarEvent,
@@ -38,6 +40,13 @@ export interface GoogleSyncAdapter {
     event: GoogleEventInput
   ): Promise<GoogleCalendarEvent>;
 
+  /** POST /calendar/v3/calendars/{calendarId}/events/{eventId}/move */
+  moveEvent(
+    calendarId: string,
+    eventId: string,
+    destinationCalendarId: string
+  ): Promise<GoogleCalendarEvent>;
+
   /**
    * PUT /calendar/v3/calendars/{calendarId}/events/{eventId}
    * etag is sent as `If-Match` for optimistic conflict detection.
@@ -66,6 +75,11 @@ export type GoogleSyncStatus = {
   error?: { message: string; calendarId?: string };
 };
 
+export type GoogleSyncDelta = {
+  calendars: { added: number; updated: number; deleted: number };
+  events: { added: number; updated: number; deleted: number };
+};
+
 export type GoogleDayFlowOptions = {
   /**
    * Allow local DayFlow mutations to write back to Google Calendar.
@@ -81,8 +95,41 @@ export type GoogleDayFlowOptions = {
     err: Error,
     context: { action: 'create' | 'update' | 'delete'; eventId?: string }
   ) => void;
+
   /**
    * Fired when the sync state changes.
    */
   onStatusChange?: (status: GoogleSyncStatus) => void;
+
+  /**
+   * Seed DayFlow with locally-cached data before the first remote sync.
+   *
+   * Called once during `start()`, before any Google Calendar API requests.
+   * Use this to hydrate from IndexedDB, Supabase, or any local store so
+   * the calendar renders immediately while the background sync runs.
+   *
+   * Errors from this callback are passed to `onWriteError` and do not abort
+   * the remote sync.
+   */
+  getInitialSnapshot?: () => Promise<{
+    events: Event[];
+    calendars: CalendarType[];
+  }>;
+
+  /**
+   * Called after each successful sync (initial, range-change, or manual refresh).
+   * Provides a count of what changed so callers can update their own stores
+   * without re-diffing the entire event set.
+   */
+  onSyncComplete?: (delta: GoogleSyncDelta) => void;
+
+  /**
+   * Called after a local event mutation is successfully written back to
+   * Google Calendar. Use this to update a local persistence layer with the
+   * server-assigned id/etag without maintaining a separate event listener.
+   */
+  onWriteComplete?: (
+    operation: 'create' | 'update' | 'delete',
+    event: Event
+  ) => void;
 };

@@ -1,7 +1,10 @@
 import { parseICalendar } from '@caldav/ics/parse';
 import { mapDayFlowEventToCalDAV } from '@caldav/mapper/fromEvent';
 import { getCalDAVMeta } from '@caldav/mapper/meta';
-import { mapCalDAVEventToDayFlow } from '@caldav/mapper/toEvent';
+import {
+  createNamespacedCalDAVEventId,
+  mapCalDAVEventToDayFlow,
+} from '@caldav/mapper/toEvent';
 import type { CalDAVEventData } from '@caldav/types/event';
 import type { Event } from '@dayflow/core';
 import { Temporal } from 'temporal-polyfill';
@@ -40,6 +43,14 @@ describe('mapCalDAVEventToDayFlow', () => {
     expect(event!.id).toBe('test-uid@example.com');
     expect(event!.title).toBe('Test Event');
     expect(event!.calendarId).toBe('cal-1');
+  });
+
+  it('supports provider-scoped event ids', () => {
+    const event = mapCalDAVEventToDayFlow(makeEventData(), {
+      createEventId: createNamespacedCalDAVEventId,
+    });
+
+    expect(event!.id).toBe('caldav:cal-1:test-uid%40example.com');
   });
 
   it('maps start time as ZonedDateTime UTC for Z-suffix DTSTART', () => {

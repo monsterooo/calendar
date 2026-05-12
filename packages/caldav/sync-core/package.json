@@ -1,0 +1,50 @@
+{
+  "name": "@dayflow/sync-core",
+  "version": "0.1.0",
+  "description": "Provider-neutral sync primitives for DayFlow calendar integrations",
+  "keywords": [
+    "calendar",
+    "dayflow",
+    "sync"
+  ],
+  "license": "MIT",
+  "author": "Jayce Li",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && rollup -c",
+    "clean": "rimraf dist node_modules",
+    "postbuild": "rimraf dist/types",
+    "prebuild": "rimraf dist",
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@dayflow/core": "workspace:*",
+    "@rollup/plugin-commonjs": "catalog:",
+    "@rollup/plugin-node-resolve": "catalog:",
+    "@rollup/plugin-typescript": "catalog:",
+    "@types/jest": "catalog:",
+    "jest": "catalog:",
+    "rimraf": "catalog:",
+    "rollup": "catalog:",
+    "rollup-plugin-dts": "catalog:",
+    "ts-jest": "catalog:",
+    "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "@dayflow/core": "workspace:*"
+  }
+}

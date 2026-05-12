@@ -1,5 +1,6 @@
 import type { Event } from '@dayflow/core';
 import { createGoogleSync } from '@google-sync/sync/createGoogleSync';
+import { GoogleSyncError } from '@google-sync/sync/createGoogleSyncAdapter';
 import type { GoogleSyncAdapter } from '@google-sync/types/adapter';
 import type {
   GoogleCalendarEvent,
@@ -83,6 +84,7 @@ function makeAdapter(
       Promise.resolve(makeApiEvent({ etag: '"updated-etag"' }))
     ),
     deleteEvent: jest.fn(() => Promise.resolve()),
+    moveEvent: jest.fn(() => Promise.resolve(makeApiEvent())),
     ...overrides,
   };
 }
@@ -219,6 +221,32 @@ describe('createGoogleSync – syncEvents', () => {
     });
     expect(result.events).toHaveLength(2);
     expect(result.syncToken).toBe('tok-final');
+  });
+
+  it('clears an expired sync token and retries with a full query', async () => {
+    const storage = {
+      getSyncToken: jest.fn(() => Promise.resolve('expired-token')),
+      setSyncToken: jest.fn(() => Promise.resolve()),
+    };
+    const listEvents = jest
+      .fn()
+      .mockRejectedValueOnce(new GoogleSyncError(410, 'expired'))
+      .mockResolvedValueOnce({
+        items: [makeApiEvent({ id: 'ev-after-retry' })],
+        nextSyncToken: 'fresh-token',
+      });
+    const sync = createGoogleSync(makeAdapter({ listEvents }), { storage });
+
+    const result = await sync.syncEvents('cal-1');
+
+    expect(storage.setSyncToken).toHaveBeenCalledWith('cal-1', null);
+    expect(storage.setSyncToken).toHaveBeenCalledWith('cal-1', 'fresh-token');
+    expect(listEvents).toHaveBeenNthCalledWith(
+      2,
+      'cal-1',
+      expect.objectContaining({ singleEvents: true })
+    );
+    expect(result.events[0].id).toBe('ev-after-retry');
   });
 });
 

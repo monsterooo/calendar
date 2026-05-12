@@ -13,3 +13,8 @@ export {
   GoogleSyncError,
   type GoogleSyncAdapterOptions,
 } from './createGoogleSyncAdapter';
+export { applyRemoteSnapshot } from './applyRemoteSnapshot';
+export type {
+  RemoteSnapshotDelta,
+  RemoteSnapshotOptions,
+} from './applyRemoteSnapshot';

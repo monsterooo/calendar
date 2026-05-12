@@ -166,6 +166,9 @@ const PROPFIND_RESPONSE = `<?xml version="1.0" encoding="utf-8"?>
       <D:prop>
         <D:displayname>Personal</D:displayname>
         <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+        <C:supported-calendar-component-set>
+          <C:comp name="VEVENT"/>
+        </C:supported-calendar-component-set>
         <IC:calendar-color>#3b82f6FF</IC:calendar-color>
         <D:current-user-privilege-set>
           <D:privilege><D:read/></D:privilege>
@@ -184,6 +187,9 @@ const PROPFIND_RESPONSE = `<?xml version="1.0" encoding="utf-8"?>
       <D:prop>
         <D:displayname>Public Holidays</D:displayname>
         <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+        <C:supported-calendar-component-set>
+          <C:comp name="VEVENT"/>
+        </C:supported-calendar-component-set>
         <D:current-user-privilege-set>
           <D:privilege><D:read/></D:privilege>
         </D:current-user-privilege-set>
@@ -289,6 +295,47 @@ describe('listCalendars (PROPFIND)', () => {
     expect(err).toBeInstanceOf(CalDAVError);
     expect(err.code).toBe('forbidden');
     expect(err.statusCode).toBe(403);
+  });
+
+  it('skips VTODO-only collections such as iCloud Reminders', async () => {
+    const remindersXml = `<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:response>
+    <D:href>/caldav/user/events/</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:displayname>Events</D:displayname>
+        <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+        <C:supported-calendar-component-set>
+          <C:comp name="VEVENT"/>
+        </C:supported-calendar-component-set>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/caldav/user/reminders/</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:displayname>Reminders</D:displayname>
+        <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+        <C:supported-calendar-component-set>
+          <C:comp name="VTODO"/>
+        </C:supported-calendar-component-set>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>`;
+    const { fetchFn } = makeMockFetch([{ status: 207, body: remindersXml }]);
+    const adapter = createCalDAVAdapter({
+      calendarHomeUrl: '/dav/',
+      fetch: fetchFn,
+    });
+
+    const calendars = await adapter.listCalendars();
+    expect(calendars).toHaveLength(1);
+    expect(calendars[0].name).toBe('Events');
   });
 });
 

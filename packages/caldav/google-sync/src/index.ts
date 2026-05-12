@@ -42,7 +42,10 @@ export type {
   GoogleSyncAdapter,
   GoogleSyncStatus,
   GoogleDayFlowOptions,
+  GoogleSyncDelta,
 } from './types/adapter';
+
+export type { GoogleSyncStorage } from './types/storage';
 
 // Mappers
 export {
@@ -69,3 +72,9 @@ export {
   GoogleSyncError,
   type GoogleSyncAdapterOptions,
 } from './sync/createGoogleSyncAdapter';
+
+export { applyRemoteSnapshot } from './sync/applyRemoteSnapshot';
+export type {
+  RemoteSnapshotDelta,
+  RemoteSnapshotOptions,
+} from './sync/applyRemoteSnapshot';

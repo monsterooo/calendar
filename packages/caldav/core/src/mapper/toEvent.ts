@@ -1,9 +1,35 @@
 import { parseICalDate, parseICalendar } from '@caldav/ics/parse';
+import type { ParsedVEvent } from '@caldav/ics/types';
 import type { CalDAVEventData } from '@caldav/types/event';
 import type { Event } from '@dayflow/core';
 import { Temporal } from 'temporal-polyfill';
 
 import type { CalDAVEventMeta } from './meta';
+
+export type CalDAVEventIdInput = {
+  calendarId: string;
+  uid: string;
+  href: string;
+  vevent: ParsedVEvent;
+};
+
+export type CalDAVEventMapperOptions = {
+  /**
+   * Override the DayFlow event id used for mapped CalDAV events.
+   *
+   * The mapper keeps its historical UID default for direct compatibility.
+   * DayFlow bindings can pass `createNamespacedCalDAVEventId` to avoid
+   * collisions with local events or other providers.
+   */
+  createEventId?: (input: CalDAVEventIdInput) => string;
+};
+
+export function createNamespacedCalDAVEventId({
+  calendarId,
+  uid,
+}: Pick<CalDAVEventIdInput, 'calendarId' | 'uid'>): string {
+  return `caldav:${encodeURIComponent(calendarId)}:${encodeURIComponent(uid)}`;
+}
 
 // ─── Temporal type guard (local copy — avoids importing @dayflow/core internals) ──
 
@@ -31,7 +57,10 @@ function addICalDuration(
  *
  * Returns null if the iCal data cannot be parsed or is missing required fields.
  */
-export function mapCalDAVEventToDayFlow(data: CalDAVEventData): Event | null {
+export function mapCalDAVEventToDayFlow(
+  data: CalDAVEventData,
+  options: CalDAVEventMapperOptions = {}
+): Event | null {
   let vevents;
   try {
     vevents = parseICalendar(data.icalData);
@@ -99,7 +128,13 @@ export function mapCalDAVEventToDayFlow(data: CalDAVEventData): Event | null {
   }
 
   const event: Event = {
-    id: vevent.uid,
+    id:
+      options.createEventId?.({
+        calendarId: data.calendarId,
+        uid: vevent.uid,
+        href: data.href,
+        vevent,
+      }) ?? vevent.uid,
     title: vevent.summary ?? '(No Title)',
     start,
     end,

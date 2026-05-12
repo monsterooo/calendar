@@ -1,10 +1,11 @@
+import type { CalDAVEventMapperOptions } from '@caldav/mapper/toEvent';
 import type { CalDAVCalendar } from '@caldav/types/calendar';
 import type {
   CalDAVRemoteRef,
   CalDAVSyncResult,
   CalDAVWriteResult,
 } from '@caldav/types/event';
-import type { Event } from '@dayflow/core';
+import type { CalendarType, Event } from '@dayflow/core';
 
 // ─── Headless sync engine ────────────────────────────────────────────────────
 
@@ -41,6 +42,11 @@ export type CalDAVSyncStatus = {
   state: 'idle' | 'syncing' | 'error';
   lastSyncedAt?: Date;
   error?: unknown;
+};
+
+export type CalDAVSyncDelta = {
+  calendars: { added: number; updated: number; deleted: number };
+  events: { added: number; updated: number; deleted: number };
 };
 
 export interface CalDAVDayFlowController {
@@ -82,6 +88,47 @@ export type CalDAVDayFlowOptions = {
 
   /** Called when any sync or write operation fails. */
   onError?: (error: unknown, context: CalDAVErrorContext) => void;
+
+  /**
+   * Seed DayFlow with locally-cached data before the first remote sync.
+   *
+   * Called once during `start()`, before any CalDAV requests are made.
+   * Use this to hydrate from IndexedDB, Supabase, or any local store so
+   * the calendar renders immediately while the background sync runs.
+   *
+   * Errors from this callback are passed to `onError` and do not abort
+   * the remote sync.
+   */
+  getInitialSnapshot?: () => Promise<{
+    events: Event[];
+    calendars: CalendarType[];
+  }>;
+
+  /**
+   * Called after each successful sync (initial, range-change, or manual refresh).
+   * Provides a count of what changed so callers can update their own stores
+   * without re-diffing the entire event set.
+   */
+  onSyncComplete?: (delta: CalDAVSyncDelta) => void;
+
+  /**
+   * Called after a local event mutation is successfully written back to the
+   * CalDAV server. Use this to update a local persistence layer with the
+   * server-assigned href/etag without maintaining a separate event listener.
+   */
+  onWriteComplete?: (
+    operation: 'create' | 'update' | 'delete',
+    event: Event
+  ) => void;
+
+  /**
+   * Build the DayFlow event id for remote CalDAV events.
+   *
+   * The DayFlow binding defaults to a provider-scoped id to avoid collisions
+   * with local events or other providers. Pass a custom factory if your app has
+   * an existing id strategy.
+   */
+  createEventId?: CalDAVEventMapperOptions['createEventId'];
 };
 
 export type CalDAVErrorContext = {

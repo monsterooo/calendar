@@ -1,3 +1,7 @@
+import type { CalDAVAdapter } from '@caldav/types/adapter';
+
+import { createCalDAVAdapter } from './createCalDAVAdapter';
+import type { CalDAVAdapterOptions } from './createCalDAVAdapter';
 import { CalDAVError } from './errors';
 import { normalizeXml, getFirstText } from './xml';
 
@@ -104,4 +108,25 @@ export async function discoverCalendarHome(
   }
 
   return resolveHref(principalUrl, homeHref);
+}
+
+/**
+ * Discover the calendar home URL and create a CalDAV adapter in one step.
+ *
+ * Equivalent to calling `discoverCalendarHome` followed by `createCalDAVAdapter`,
+ * but reduces setup to a single async call:
+ *
+ * ```ts
+ * const adapter = await createCalDAVAdapterFromServer(
+ *   ICLOUD_CALDAV_SERVER,
+ *   { fetch: authenticatedFetch }
+ * );
+ * ```
+ */
+export async function createCalDAVAdapterFromServer(
+  serverUrl: string,
+  options: Omit<CalDAVAdapterOptions, 'calendarHomeUrl'>
+): Promise<CalDAVAdapter> {
+  const calendarHomeUrl = await discoverCalendarHome(serverUrl, options.fetch);
+  return createCalDAVAdapter({ ...options, calendarHomeUrl });
 }

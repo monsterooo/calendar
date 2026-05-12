@@ -142,7 +142,11 @@ function makeInMemoryStorage(): CalDAVStorage {
   return {
     getSyncToken: id => Promise.resolve(store.get(`st:${id}`) ?? null),
     setSyncToken: (id, token) => {
-      store.set(`st:${id}`, token);
+      if (token) {
+        store.set(`st:${id}`, token);
+      } else {
+        store.delete(`st:${id}`);
+      }
       return Promise.resolve();
     },
     getCtag: id => Promise.resolve(store.get(`ct:${id}`) ?? null),
@@ -186,6 +190,8 @@ describe('CalDAVStorage', () => {
 
     await storage.setSyncToken('cal-1', 'tok-abc');
     expect(await storage.getSyncToken('cal-1')).toBe('tok-abc');
+    await storage.setSyncToken('cal-1', null);
+    expect(await storage.getSyncToken('cal-1')).toBeNull();
     expect(await storage.getSyncToken('cal-x')).toBeNull();
 
     await storage.setEtag('/cal/e1.ics', '"etag1"');

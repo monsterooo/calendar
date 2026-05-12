@@ -1,5 +1,6 @@
 import { CalDAVError } from '@caldav/adapter/errors';
 import { getCalDAVMeta } from '@caldav/mapper/meta';
+import { createNamespacedCalDAVEventId } from '@caldav/mapper/toEvent';
 import { attachCalDAVToDayFlow } from '@caldav/sync/attachCalDAVToDayFlow';
 import { createCalDAVSync } from '@caldav/sync/createCalDAVSync';
 import { mapCalDAVCalendarToDayFlow } from '@caldav/sync/mapCalendar';
@@ -14,6 +15,10 @@ import { Temporal } from 'temporal-polyfill';
 
 const CAL_ID = '/caldav/user/personal/';
 const EVENT_HREF = `${CAL_ID}event1.ics`;
+const EVENT_ID = createNamespacedCalDAVEventId({
+  calendarId: CAL_ID,
+  uid: 'event1@test',
+});
 
 const REMOTE_CALENDAR: CalDAVCalendar = {
   id: CAL_ID,
@@ -114,8 +119,12 @@ function makeStorage() {
     getSyncToken: jest.fn((id: string) =>
       Promise.resolve(store.get(`st:${id}`) ?? null)
     ),
-    setSyncToken: jest.fn((id: string, t: string) => {
-      store.set(`st:${id}`, t);
+    setSyncToken: jest.fn((id: string, t: string | null) => {
+      if (t) {
+        store.set(`st:${id}`, t);
+      } else {
+        store.delete(`st:${id}`);
+      }
       return Promise.resolve();
     }),
     getCtag: jest.fn(() => Promise.resolve(null)),
@@ -164,6 +173,23 @@ describe('createCalDAVSync', () => {
     const result = await engine.listCalendars();
     expect(adapter.listCalendars).toHaveBeenCalled();
     expect(result).toHaveLength(1);
+  });
+
+  it('uses in-memory storage when storage is omitted', async () => {
+    const adapter = makeAdapter();
+    adapter.syncEvents.mockResolvedValueOnce({
+      events: [makeRemoteEventData()],
+      deleted: [],
+      syncToken: 'sync-token-1',
+    });
+    const engine = createCalDAVSync({ adapter });
+
+    await engine.syncEvents({ calendarId: CAL_ID });
+    await engine.syncEvents({ calendarId: CAL_ID });
+
+    expect(adapter.syncEvents).toHaveBeenLastCalledWith(
+      expect.objectContaining({ syncToken: 'sync-token-1' })
+    );
   });
 
   it('stores etag in storage after createEvent', async () => {
@@ -253,6 +279,18 @@ describe('createCalDAVSync', () => {
     await engine.syncEvents({ calendarId: CAL_ID });
 
     expect(storage.setSyncToken).toHaveBeenCalledWith(CAL_ID, 'sync-token-2');
+  });
+
+  it('clears stale stored sync token when adapter falls back to a full sync', async () => {
+    const adapter = makeAdapter();
+    const storage = makeStorage();
+    await storage.setSyncToken(CAL_ID, 'stale-token');
+    storage.setSyncToken.mockClear();
+    const engine = createCalDAVSync({ adapter, storage: storage as never });
+
+    await engine.syncEvents({ calendarId: CAL_ID });
+
+    expect(storage.setSyncToken).toHaveBeenCalledWith(CAL_ID, null);
   });
 
   it('stores updated etag after updateEvent', async () => {
@@ -471,8 +509,8 @@ describe('attachCalDAVToDayFlow – range sync', () => {
     await flush();
 
     const events = app.getAllEvents();
-    expect(events.filter(e => e.id === 'event1@test')).toHaveLength(1);
-    expect(events.find(e => e.id === 'event1@test')!.title).toBe(
+    expect(events.filter(e => e.id === EVENT_ID)).toHaveLength(1);
+    expect(events.find(e => e.id === EVENT_ID)!.title).toBe(
       'Updated Remote Event'
     );
   });
@@ -608,7 +646,7 @@ describe('attachCalDAVToDayFlow – write-back (updates)', () => {
     const sync = makeMockSync();
     const { app } = await setupWithExistingRemoteEvent(sync);
 
-    await app.updateEvent('event1@test', { title: 'Changed Title' });
+    await app.updateEvent(EVENT_ID, { title: 'Changed Title' });
     await flush();
 
     expect(sync.updateEvent).toHaveBeenCalledWith(
@@ -673,7 +711,7 @@ describe('attachCalDAVToDayFlow – write-back (deletes)', () => {
     await controller.start();
     sync.deleteEvent.mockClear();
 
-    await app.deleteEvent('event1@test');
+    await app.deleteEvent(EVENT_ID);
     await flush();
 
     expect(sync.deleteEvent).toHaveBeenCalledWith(
@@ -733,7 +771,7 @@ describe('attachCalDAVToDayFlow – read-only calendars', () => {
     await flush();
     expect(sync.createEvent).not.toHaveBeenCalled();
 
-    await app.updateEvent('event1@test', { title: 'Update Allowed' });
+    await app.updateEvent(EVENT_ID, { title: 'Update Allowed' });
     await flush();
     expect(sync.updateEvent).toHaveBeenCalled();
   });
@@ -758,7 +796,7 @@ describe('attachCalDAVToDayFlow – ETag conflict', () => {
     const controller = attachCalDAVToDayFlow(app, sync, { onError });
     await controller.start();
 
-    await app.updateEvent('event1@test', { title: 'Conflict' });
+    await app.updateEvent(EVENT_ID, { title: 'Conflict' });
     await flush();
 
     expect(onError).toHaveBeenCalledWith(

@@ -26,6 +26,8 @@ import {
   attachCalDAVToDayFlow,
   createCalDAVAdapter,
   createCalDAVSync,
+  createNamespacedCalDAVEventId,
+  mapCalDAVEventToDayFlow,
 } from '@dayflow/caldav';
 
 const adapter = createCalDAVAdapter({
@@ -45,6 +47,7 @@ const sync = createCalDAVSync({
 const controller = attachCalDAVToDayFlow(calendar.app, sync, {
   writable: true,
   refreshOnVisibleRangeChange: true,
+  createEventId: createNamespacedCalDAVEventId,
   eventMode: {
     recurring: 'read-only',
   },
@@ -124,17 +127,30 @@ Options:
 - `refreshOnVisibleRangeChange`: sync when the user navigates to a new range.
 - `eventMode.recurring`: currently `read-only`.
 - `onError`: receives sync/write errors with operation context.
+- `createEventId`: build DayFlow ids for remote CalDAV events. The binding
+  defaults to provider-scoped ids via `createNamespacedCalDAVEventId`.
 
 The controller registers remote calendars, applies remote events with `source: 'remote'`, observes local event changes, and writes eligible non-recurring changes back through the sync engine.
 
+Direct mapper calls keep the historical UID-as-id default for compatibility:
+
+```ts
+const event = mapCalDAVEventToDayFlow(data, {
+  createEventId: createNamespacedCalDAVEventId,
+});
+```
+
 ### CalDAVStorage
 
-Applications provide storage for sync bookkeeping:
+Applications provide durable storage for sync bookkeeping. If no storage is
+provided, `createCalDAVSync` uses an in-memory adapter intended for tests and
+quick starts only; production apps should persist this state in IndexedDB,
+localStorage, or a server-side store.
 
 ```ts
 interface CalDAVStorage {
   getSyncToken(calendarId: string): Promise<string | null>;
-  setSyncToken(calendarId: string, token: string): Promise<void>;
+  setSyncToken(calendarId: string, token: string | null): Promise<void>;
   getCtag(calendarId: string): Promise<string | null>;
   setCtag(calendarId: string, ctag: string): Promise<void>;
   getEtag(href: string): Promise<string | null>;

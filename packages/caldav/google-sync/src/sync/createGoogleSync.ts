@@ -7,6 +7,7 @@ import {
 import type { GoogleSyncAdapter } from '@google-sync/types/adapter';
 import type { GoogleCalendarEvent } from '@google-sync/types/api';
 import { getGoogleMeta } from '@google-sync/types/meta';
+import type { GoogleSyncStorage } from '@google-sync/types/storage';
 
 import { GoogleSyncError } from './createGoogleSyncAdapter';
 
@@ -54,7 +55,12 @@ function remapWithMeta(
   return mapGoogleEventToDayFlow(googleEvent, calendarId);
 }
 
-export function createGoogleSync(adapter: GoogleSyncAdapter): GoogleSync {
+export function createGoogleSync(
+  adapter: GoogleSyncAdapter,
+  options?: { storage?: GoogleSyncStorage }
+): GoogleSync {
+  const storage = options?.storage;
+
   return {
     async listCalendars(): Promise<CalendarType[]> {
       const list = await adapter.listCalendars();
@@ -62,22 +68,49 @@ export function createGoogleSync(adapter: GoogleSyncAdapter): GoogleSync {
     },
 
     async syncEvents(calendarId, range, syncToken): Promise<GoogleSyncResult> {
+      // Explicit syncToken takes priority; fall back to stored token for
+      // incremental sync when no range is requested (full-calendar refresh).
+      let effectiveToken =
+        syncToken ??
+        (range ? null : ((await storage?.getSyncToken(calendarId)) ?? null));
+
       const events: Event[] = [];
       const deleted: string[] = [];
       let token: string | undefined;
       let pageToken: string | undefined;
+      let retriedExpiredToken = false;
 
-      do {
-        const result = await adapter.listEvents(calendarId, {
-          ...(syncToken
-            ? { syncToken, showDeleted: true }
-            : {
-                timeMin: range?.start,
-                timeMax: range?.end,
-                singleEvents: true,
-              }),
-          pageToken,
-        });
+      while (true) {
+        let result;
+        try {
+          result = await adapter.listEvents(calendarId, {
+            ...(effectiveToken
+              ? { syncToken: effectiveToken, showDeleted: true }
+              : {
+                  timeMin: range?.start,
+                  timeMax: range?.end,
+                  singleEvents: true,
+                }),
+            pageToken,
+          });
+        } catch (err) {
+          if (
+            err instanceof GoogleSyncError &&
+            err.statusCode === 410 &&
+            effectiveToken &&
+            !retriedExpiredToken
+          ) {
+            await storage?.setSyncToken(calendarId, null);
+            effectiveToken = null;
+            pageToken = undefined;
+            token = undefined;
+            events.length = 0;
+            deleted.length = 0;
+            retriedExpiredToken = true;
+            continue;
+          }
+          throw err;
+        }
 
         for (const item of result.items) {
           if (item.status === 'cancelled') {
@@ -91,7 +124,12 @@ export function createGoogleSync(adapter: GoogleSyncAdapter): GoogleSync {
 
         token = result.nextSyncToken;
         pageToken = result.nextPageToken;
-      } while (pageToken);
+        if (!pageToken) break;
+      }
+
+      if (token && storage) {
+        await storage.setSyncToken(calendarId, token);
+      }
 
       return { events, deleted, syncToken: token };
     },

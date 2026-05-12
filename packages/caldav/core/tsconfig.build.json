@@ -1,15 +1,19 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "dist",
+    "outDir": "dist/build",
     "declaration": true,
-    "emitDeclarationOnly": true,
+    "emitDeclarationOnly": false,
     "declarationDir": "dist/types",
     "declarationMap": false,
     "sourceMap": false,
     "module": "ESNext",
-    "target": "ES2015",
-    "noEmit": false
+    "target": "ES2017",
+    "noEmit": false,
+    "rootDir": "src",
+    "paths": {
+      "@caldav/*": ["./src/*"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.spec.ts"]

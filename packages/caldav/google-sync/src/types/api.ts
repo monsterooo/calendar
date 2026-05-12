@@ -61,4 +61,6 @@ export type GoogleListEventsOptions = {
   pageToken?: string;
   singleEvents?: boolean;
   showDeleted?: boolean;
+  maxResults?: number;
+  orderBy?: 'startTime' | 'updated';
 };

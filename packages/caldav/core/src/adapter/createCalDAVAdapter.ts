@@ -35,6 +35,7 @@ const PROPFIND_BODY = `<?xml version="1.0" encoding="utf-8"?>
   <D:prop>
     <D:displayname/>
     <D:resourcetype/>
+    <C:supported-calendar-component-set/>
     <D:current-user-privilege-set/>
     <IC:calendar-color/>
     <CS:calendar-color/>
@@ -92,6 +93,16 @@ function parseCalendars(xml: string): CalDAVCalendar[] {
 
   for (const block of getResponseBlocks(xml)) {
     if (!isCalendarCollection(block)) continue;
+    const supportedComponentSet = getFirstText(
+      block,
+      'supported-calendar-component-set'
+    );
+    if (
+      supportedComponentSet &&
+      !/<comp(?:\s[^>]*)?\sname=["']VEVENT["']/i.test(supportedComponentSet)
+    ) {
+      continue;
+    }
 
     const id = getFirstText(block, 'href');
     const name = getFirstText(block, 'displayname');
@@ -256,8 +267,32 @@ export function createCalDAVAdapter(
 ): CalDAVAdapter {
   const { calendarHomeUrl, fetch: userFetch } = options;
 
+  function resolveRequestUrl(url: string): string {
+    if (/^https?:\/\//i.test(url)) {
+      return url;
+    }
+
+    if (/^https?:\/\//i.test(calendarHomeUrl)) {
+      const base = calendarHomeUrl.endsWith('/')
+        ? calendarHomeUrl
+        : `${calendarHomeUrl}/`;
+
+      return new URL(url, base).toString();
+    }
+
+    if (url.startsWith('/')) {
+      return url;
+    }
+
+    const base = calendarHomeUrl.endsWith('/')
+      ? calendarHomeUrl
+      : `${calendarHomeUrl}/`;
+
+    return `${base}${url}`;
+  }
+
   function request(url: string, init: RequestInit): Promise<Response> {
-    return userFetch(url, init);
+    return userFetch(resolveRequestUrl(url), init);
   }
 
   return {

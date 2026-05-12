@@ -4,6 +4,7 @@ import type { CalDAVRemoteRef, CalDAVWriteResult } from '@caldav/types/event';
 import type { CalDAVStorage } from '@caldav/types/storage';
 import type { Event } from '@dayflow/core';
 
+import { createMemoryCalDAVStorage } from './memoryStorage';
 import type { CalDAVSync } from './types';
 
 /**
@@ -14,10 +15,10 @@ import type { CalDAVSync } from './types';
  */
 export function createCalDAVSync({
   adapter,
-  storage,
+  storage = createMemoryCalDAVStorage(),
 }: {
   adapter: CalDAVAdapter;
-  storage: CalDAVStorage;
+  storage?: CalDAVStorage;
 }): CalDAVSync {
   return {
     listCalendars: () => adapter.listCalendars(),
@@ -36,6 +37,8 @@ export function createCalDAVSync({
       // Persist new sync token for the next incremental call
       if (result.syncToken) {
         await storage.setSyncToken(calendarId, result.syncToken);
+      } else if (storedToken) {
+        await storage.setSyncToken(calendarId, null);
       }
 
       await Promise.all([

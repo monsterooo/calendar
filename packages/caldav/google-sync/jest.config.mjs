@@ -15,6 +15,7 @@ export default {
   },
   moduleNameMapper: {
     '^@google-sync/(.*)$': '<rootDir>/src/$1',
+    '^@dayflow/sync-core$': '<rootDir>/../sync-core/src/index.ts',
     '^@dayflow/core$': '<rootDir>/../../../packages/core/src/caldav-entry.ts',
     '^@/(.*)$': '<rootDir>/../../../packages/core/src/$1',
     '^preact$': `${coreModules}/preact/dist/preact.js`,

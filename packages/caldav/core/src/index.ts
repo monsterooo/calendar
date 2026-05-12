@@ -30,12 +30,22 @@ export type {
 } from './types';
 
 // iCalendar mapping
-export { mapCalDAVEventToDayFlow, mapDayFlowEventToCalDAV } from './mapper';
-export type { CalDAVEventMeta } from './mapper';
+export {
+  createNamespacedCalDAVEventId,
+  getCalDAVMeta,
+  mapCalDAVEventToDayFlow,
+  mapDayFlowEventToCalDAV,
+} from './mapper';
+export type {
+  CalDAVEventIdInput,
+  CalDAVEventMapperOptions,
+  CalDAVEventMeta,
+} from './mapper';
 
 // CalDAV protocol adapter
 export {
   createCalDAVAdapter,
+  createCalDAVAdapterFromServer,
   CalDAVError,
   discoverCalendarHome,
   ICLOUD_CALDAV_SERVER,
@@ -53,15 +63,26 @@ export {
   type ParsedRRule,
   type RRuleFreq,
 } from './ics/rrule';
+export { parseICalendar, parseICalDate } from './ics/parse';
+export type {
+  ParsedVEvent,
+  ICalProperty,
+  ICalPropertyParams,
+} from './ics/types';
 
 // Sync engine + DayFlow binding
 export {
   createCalDAVSync,
+  createMemoryCalDAVStorage,
   attachCalDAVToDayFlow,
+  applyRemoteSnapshot,
   mapCalDAVCalendarToDayFlow,
   type CalDAVSync,
   type CalDAVDayFlowController,
   type CalDAVDayFlowOptions,
   type CalDAVSyncStatus,
+  type CalDAVSyncDelta,
   type CalDAVErrorContext,
+  type RemoteSnapshotOptions,
+  type RemoteSnapshotDelta,
 } from './sync';

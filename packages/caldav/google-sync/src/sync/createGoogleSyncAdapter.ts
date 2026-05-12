@@ -18,8 +18,27 @@ export type GoogleSyncAdapterOptions = {
   /**
    * Fetch implementation. Must inject Authorization header.
    * In browser apps, route through a backend proxy so credentials stay server-side.
+   *
+   * When `getToken` is also provided, `getToken` takes priority for Authorization.
    */
   fetch?: (url: string, init?: RequestInit) => Promise<Response>;
+
+  /**
+   * Return the current access token. Called before every request, so token
+   * refreshes are transparent — the adapter does not need to be recreated
+   * when the token changes.
+   *
+   * ```ts
+   * const adapter = createGoogleSyncAdapter({
+   *   getToken: () => supabase.auth.getSession()
+   *     .then(r => r.data.session?.provider_token ?? ''),
+   * });
+   * ```
+   *
+   * When set, the adapter injects `Authorization: Bearer <token>` automatically.
+   * Provide either `getToken` or a pre-authenticated `fetch`, not both.
+   */
+  getToken?: () => string | Promise<string>;
 };
 
 const DEFAULT_BASE = 'https://www.googleapis.com/calendar/v3';
@@ -61,12 +80,18 @@ export function createGoogleSyncAdapter(
   const base = (options.baseUrl ?? DEFAULT_BASE).replace(/\/$/, '');
   const fetcher: (url: string, init?: RequestInit) => Promise<Response> =
     options.fetch ?? ((url, init) => globalThis.fetch(url, init));
+  const { getToken } = options;
 
   async function request<T>(url: string, init?: RequestInit): Promise<T> {
+    const authHeaders: Record<string, string> = {};
+    if (getToken) {
+      authHeaders['Authorization'] = `Bearer ${await getToken()}`;
+    }
     const response = await fetcher(url, {
       ...init,
       headers: {
         'Content-Type': 'application/json',
+        ...authHeaders,
         ...init?.headers,
       },
     });
@@ -130,6 +155,9 @@ export function createGoogleSyncAdapter(
         params.set('singleEvents', String(opts.singleEvents));
       if (opts.showDeleted !== undefined)
         params.set('showDeleted', String(opts.showDeleted));
+      if (opts.maxResults !== undefined)
+        params.set('maxResults', String(opts.maxResults));
+      if (opts.orderBy) params.set('orderBy', opts.orderBy);
 
       return listAllPages<GoogleEventList>(pt => {
         const p = new URLSearchParams(params);
@@ -154,6 +182,21 @@ export function createGoogleSyncAdapter(
       return request<GoogleCalendarEvent>(
         `${base}/calendars/${encodeURIComponent(calendarId)}/events`,
         { method: 'POST', body: JSON.stringify(event) }
+      );
+    },
+
+    moveEvent(
+      calendarId: string,
+      eventId: string,
+      destinationCalendarId: string
+    ): Promise<GoogleCalendarEvent> {
+      const params = new URLSearchParams({
+        destination: destinationCalendarId,
+      });
+
+      return request<GoogleCalendarEvent>(
+        `${base}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}/move?${params}`,
+        { method: 'POST' }
       );
     },
 

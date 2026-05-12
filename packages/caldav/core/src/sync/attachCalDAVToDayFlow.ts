@@ -1,8 +1,12 @@
 import { getCalDAVMeta } from '@caldav/mapper/meta';
-import { mapCalDAVEventToDayFlow } from '@caldav/mapper/toEvent';
+import {
+  createNamespacedCalDAVEventId,
+  mapCalDAVEventToDayFlow,
+} from '@caldav/mapper/toEvent';
 import type { CalDAVCalendar } from '@caldav/types/calendar';
-import type { CalDAVRemoteRef } from '@caldav/types/event';
-import type { EventChange, ICalendarApp } from '@dayflow/core';
+import type { CalDAVDeletedEvent, CalDAVRemoteRef } from '@caldav/types/event';
+import type { Event, EventChange, ICalendarApp } from '@dayflow/core';
+import { applyProviderEventsToDayFlow } from '@dayflow/sync-core';
 
 import { mapCalDAVCalendarToDayFlow } from './mapCalendar';
 import type {
@@ -10,6 +14,7 @@ import type {
   CalDAVDayFlowOptions,
   CalDAVErrorContext,
   CalDAVSync,
+  CalDAVSyncDelta,
   CalDAVSyncStatus,
 } from './types';
 
@@ -17,10 +22,13 @@ import type {
  * Attach a CalDAV sync engine to a DayFlow CalendarApp.
  *
  * The binding:
+ * - Optionally hydrates DayFlow from a local cache before the first remote sync
  * - Discovers remote calendars and registers them in DayFlow
  * - Syncs events on startup and on each visible-range change
  * - Observes local DayFlow event mutations and writes eligible ones back to CalDAV
  * - Applies remote changes with `source: 'remote'` to prevent write-back loops
+ * - Fires `onSyncComplete` after each sync with a count of what changed
+ * - Fires `onWriteComplete` after each successful write-back
  *
  * Accepted by `ICalendarApp`, so it works with any DayFlow framework adapter.
  */
@@ -38,6 +46,10 @@ export function attachCalDAVToDayFlow(
     refreshOnVisibleRangeChange = true,
     eventMode = { recurring: 'read-only' },
     onError,
+    getInitialSnapshot,
+    onSyncComplete,
+    onWriteComplete,
+    createEventId = createNamespacedCalDAVEventId,
   } = options;
 
   let status: CalDAVSyncStatus = { state: 'idle' };
@@ -92,42 +104,33 @@ export function attachCalDAVToDayFlow(
   async function syncRange(
     range: { start: Date; end: Date } | undefined,
     _context: Pick<CalDAVErrorContext, 'operation'>
-  ): Promise<void> {
-    const existingById = new Map(app.getAllEvents().map(e => [e.id, e]));
+  ): Promise<CalDAVSyncDelta> {
+    const delta: CalDAVSyncDelta = {
+      calendars: { added: 0, updated: 0, deleted: 0 },
+      events: { added: 0, updated: 0, deleted: 0 },
+    };
 
     for (const calendarId of knownCalendarIds) {
       const result = await sync.syncEvents({ calendarId, range });
 
-      const adds = [];
-      const updates = [];
+      const events = result.events
+        .map(data => mapCalDAVEventToDayFlow(data, { createEventId }))
+        .filter((event): event is Event => event !== null);
 
-      for (const data of result.events) {
-        const event = mapCalDAVEventToDayFlow(data);
-        if (!event) continue;
+      const eventDelta = applyProviderEventsToDayFlow<CalDAVDeletedEvent>({
+        app,
+        events,
+        deleted: result.deleted,
+        getProviderEventId: event => getCalDAVMeta(event)?.href,
+        getDeletedProviderEventId: deleted => deleted.href,
+      });
 
-        if (existingById.has(event.id)) {
-          updates.push({ id: event.id, updates: event });
-        } else {
-          adds.push(event);
-        }
-      }
-
-      // Apply with source='remote' so the event-change listener skips write-back
-      if (adds.length > 0 || updates.length > 0) {
-        app.applyEventsChanges({ add: adds, update: updates }, false, 'remote');
-      }
-
-      // Handle server-reported deletions (populated by sync-collection REPORT in Phase 8)
-      for (const del of result.deleted) {
-        const existing = app.getAllEvents().find(e => {
-          const meta = getCalDAVMeta(e);
-          return meta?.href === del.href;
-        });
-        if (existing) {
-          app.applyEventsChanges({ delete: [existing.id] }, false, 'remote');
-        }
-      }
+      delta.events.added += eventDelta.added;
+      delta.events.updated += eventDelta.updated;
+      delta.events.deleted += eventDelta.deleted;
     }
+
+    return delta;
   }
 
   // ─── Write-back eligibility ──────────────────────────────────────────────────
@@ -164,10 +167,8 @@ export function attachCalDAVToDayFlow(
     const meta = getCalDAVMeta(event);
     const recurringMode = eventMode.recurring ?? 'read-only';
 
-    // Block recurring events in MVP
     if (meta?.isRecurring && recurringMode === 'read-only') return false;
 
-    // update/delete require an existing remote ref
     if ((change.type === 'update' || change.type === 'delete') && !meta?.href) {
       return false;
     }
@@ -230,6 +231,7 @@ export function attachCalDAVToDayFlow(
               false,
               'remote'
             );
+            onWriteComplete?.('create', event);
           } else if (change.type === 'update') {
             const remote: CalDAVRemoteRef = {
               calendarId: meta!.calendarId,
@@ -263,6 +265,7 @@ export function attachCalDAVToDayFlow(
               false,
               'remote'
             );
+            onWriteComplete?.('update', event);
           } else if (change.type === 'delete') {
             const remote: CalDAVRemoteRef = {
               calendarId: meta!.calendarId,
@@ -271,6 +274,7 @@ export function attachCalDAVToDayFlow(
               etag: meta!.etag,
             };
             await sync.deleteEvent({ calendarId, remote });
+            onWriteComplete?.('delete', event);
           }
         } catch (err) {
           setError(err, {
@@ -291,7 +295,10 @@ export function attachCalDAVToDayFlow(
       currentRange = { start: payload.start, end: payload.end };
       setSyncing();
       try {
-        await syncRange(currentRange, { operation: 'range-sync' });
+        const delta = await syncRange(currentRange, {
+          operation: 'range-sync',
+        });
+        onSyncComplete?.(delta);
         setIdle();
       } catch (err) {
         setError(err, { operation: 'range-sync' });
@@ -307,8 +314,33 @@ export function attachCalDAVToDayFlow(
       if (started) return;
       setSyncing();
       try {
+        // Hydrate from local cache before any remote requests
+        if (getInitialSnapshot) {
+          try {
+            const snapshot = await getInitialSnapshot();
+            for (const cal of snapshot.calendars) {
+              if (!app.getCalendars().some(c => c.id === cal.id)) {
+                await app.createCalendar(cal);
+              }
+              knownCalendarIds.add(cal.id);
+            }
+            if (snapshot.events.length > 0) {
+              app.applyEventsChanges(
+                { add: snapshot.events },
+                false,
+                'remote' as never
+              );
+            }
+          } catch (err) {
+            onError?.(err, { operation: 'initial-sync' });
+          }
+        }
+
         await loadCalendars();
-        await syncRange(currentRange, { operation: 'initial-sync' });
+        const delta = await syncRange(currentRange, {
+          operation: 'initial-sync',
+        });
+        onSyncComplete?.(delta);
         setIdle();
         setupRangeChangeListener();
         setupEventChangeListener();
@@ -335,46 +367,35 @@ export function attachCalDAVToDayFlow(
       const effectiveRange = range ?? currentRange;
       try {
         if (calendarId) {
-          // Targeted refresh: one calendar only
-          const existingById = new Map(app.getAllEvents().map(e => [e.id, e]));
           const result = await sync.syncEvents({
             calendarId,
             range: effectiveRange,
           });
-          const adds = [];
-          const updates = [];
-          for (const data of result.events) {
-            const event = mapCalDAVEventToDayFlow(data);
-            if (!event) continue;
-            if (existingById.has(event.id)) {
-              updates.push({ id: event.id, updates: event });
-            } else {
-              adds.push(event);
-            }
-          }
-          if (adds.length > 0 || updates.length > 0) {
-            app.applyEventsChanges(
-              { add: adds, update: updates },
-              false,
-              'remote'
-            );
-          }
-          for (const del of result.deleted) {
-            const existing = app.getAllEvents().find(e => {
-              const meta = getCalDAVMeta(e);
-              return meta?.href === del.href;
-            });
-            if (existing) {
-              app.applyEventsChanges(
-                { delete: [existing.id] },
-                false,
-                'remote'
-              );
-            }
-          }
+          const events = result.events
+            .map(data => mapCalDAVEventToDayFlow(data, { createEventId }))
+            .filter((event): event is Event => event !== null);
+          const eventDelta = applyProviderEventsToDayFlow<CalDAVDeletedEvent>({
+            app,
+            events,
+            deleted: result.deleted,
+            getProviderEventId: event => getCalDAVMeta(event)?.href,
+            getDeletedProviderEventId: deleted => deleted.href,
+          });
+          const delta: CalDAVSyncDelta = {
+            calendars: { added: 0, updated: 0, deleted: 0 },
+            events: {
+              added: eventDelta.added,
+              updated: eventDelta.updated,
+              deleted: eventDelta.deleted,
+            },
+          };
+          onSyncComplete?.(delta);
         } else {
           await loadCalendars();
-          await syncRange(effectiveRange, { operation: 'range-sync' });
+          const delta = await syncRange(effectiveRange, {
+            operation: 'range-sync',
+          });
+          onSyncComplete?.(delta);
         }
         setIdle();
       } catch (err) {

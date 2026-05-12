@@ -15,6 +15,7 @@ export default {
   },
   moduleNameMapper: {
     '^@caldav/(.*)$': '<rootDir>/src/$1',
+    '^@dayflow/sync-core$': '<rootDir>/../sync-core/src/index.ts',
     // Use a slim core entry that avoids JSX/renderer imports
     '^@dayflow/core$': '<rootDir>/../../../packages/core/src/caldav-entry.ts',
     '^@/(.*)$': '<rootDir>/../../../packages/core/src/$1',

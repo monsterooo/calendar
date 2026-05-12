@@ -15,4 +15,7 @@ export type {
   GoogleSyncAdapter,
   GoogleSyncStatus,
   GoogleDayFlowOptions,
+  GoogleSyncDelta,
 } from './adapter';
+
+export type { GoogleSyncStorage } from './storage';

@@ -20,7 +20,7 @@ export type CalDAVEventSyncState = {
 export interface CalDAVStorage {
   /** Get the last known sync token for a calendar (for REPORT sync-collection). */
   getSyncToken(calendarId: string): Promise<string | null>;
-  setSyncToken(calendarId: string, token: string): Promise<void>;
+  setSyncToken(calendarId: string, token: string | null): Promise<void>;
 
   /** Get the last known ctag for a calendar (fallback when sync tokens are unavailable). */
   getCtag(calendarId: string): Promise<string | null>;
