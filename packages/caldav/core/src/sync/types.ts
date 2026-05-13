@@ -36,6 +36,16 @@ export interface CalDAVSync {
   }): Promise<void>;
 }
 
+export type CalDAVSyncOptions = {
+  /**
+   * Split visible-range REPORT requests into smaller date windows.
+   *
+   * Useful for very large calendars or providers that time out on broad
+   * calendar-query REPORTs. Disabled by default.
+   */
+  rangeChunkDays?: number;
+};
+
 // ─── DayFlow binding ─────────────────────────────────────────────────────────
 
 export type CalDAVSyncStatus = {
@@ -77,6 +87,12 @@ export type CalDAVDayFlowOptions = {
    * Default: true.
    */
   refreshOnVisibleRangeChange?: boolean;
+
+  /**
+   * Maximum number of calendars to sync in parallel from the DayFlow binding.
+   * Default: 4.
+   */
+  maxConcurrentCalendars?: number;
 
   eventMode?: {
     /**

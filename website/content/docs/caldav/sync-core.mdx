@@ -1,0 +1,186 @@
+# @dayflow/sync-core
+
+`@dayflow/sync-core` contains provider-neutral reconciliation helpers used by DayFlow sync integrations. Most applications do not need to import it directly. Use a provider package first:
+
+- [`@dayflow/caldav`](/docs/caldav/caldav) for CalDAV servers.
+- [`@dayflow/google-sync`](/docs/caldav/google-sync) for Google Calendar.
+- [`@dayflow/outlook-sync`](/docs/caldav/outlook-sync) for Outlook Calendar.
+
+Use `@dayflow/sync-core` when you are building a custom provider, syncing through backend jobs, or keeping a product-specific calendar/event database in sync with remote provider records.
+
+## Installation
+
+<PackageTabs pkg='@dayflow/sync-core' />
+
+## What It Owns
+
+`@dayflow/sync-core` owns the provider-neutral diff/apply layer:
+
+| Helper                         | Use it when                                                                               |
+| :----------------------------- | :---------------------------------------------------------------------------------------- |
+| `applyProviderEventsToDayFlow` | A provider binding already has mapped DayFlow events and deleted remote refs.             |
+| `applyRemoteSnapshot`          | You have a complete or partial provider snapshot and want to apply it to a `CalendarApp`. |
+| `reconcileProviderCalendars`   | You sync remote calendars into your own database records.                                 |
+| `reconcileProviderEvents`      | You sync remote events into your own database records and want normalized change records. |
+
+It does not provide provider adapters, auth flows, token refresh, credential storage, history persistence, background jobs, retry queues, or a database schema.
+
+## Apply Provider Events to DayFlow
+
+Provider packages use `applyProviderEventsToDayFlow` after mapping remote events into DayFlow `Event` objects. It matches existing events by provider identity first, then by DayFlow id, and applies changes with `source: 'remote'` to avoid write-back loops.
+
+```ts
+import { applyProviderEventsToDayFlow } from '@dayflow/sync-core';
+
+const delta = applyProviderEventsToDayFlow({
+  app: calendar.app,
+  events: mappedRemoteEvents,
+  deleted: deletedRemoteRefs,
+  getProviderEventId: event => event.meta?.myProvider?.href,
+  getDeletedProviderEventId: deleted => deleted.href,
+  resolveUpdate: (remote, existing) => ({
+    ...remote,
+    meta: {
+      ...existing.meta,
+      ...remote.meta,
+    },
+  }),
+});
+
+console.log(delta.added, delta.updated, delta.deleted);
+```
+
+Prefer a stable provider identity such as CalDAV `href`, Google event id, or Graph event id. This keeps local state from duplicating events if your DayFlow id strategy changes later.
+
+## Apply Remote Snapshots
+
+`applyRemoteSnapshot` reconciles a snapshot of DayFlow calendars and events into the app.
+
+```ts
+import { applyRemoteSnapshot } from '@dayflow/sync-core';
+
+const delta = await applyRemoteSnapshot(
+  calendar.app,
+  {
+    calendars: remoteCalendars,
+    events: remoteEvents,
+  },
+  {
+    isOwnedCalendar: calendar => calendar.source === 'Custom Provider',
+    isOwnedEvent: event => event.meta?.provider === 'custom',
+    resolveConflict: (remote, local) => ({
+      ...remote,
+      meta: {
+        ...local.meta,
+        ...remote.meta,
+      },
+    }),
+    snapshotMode: 'authoritative',
+  }
+);
+```
+
+Deletion is the sharp edge. The default `snapshotMode` is `'partial'`, so owned local records missing from the snapshot are preserved. That is safe for visible-range sync, filtered queries, or paginated provider responses:
+
+```ts
+await applyRemoteSnapshot(calendar.app, partialSnapshot, {
+  isOwnedCalendar,
+  isOwnedEvent,
+  snapshotMode: 'partial',
+});
+```
+
+Use `snapshotMode: 'authoritative'` only when the snapshot fully represents all provider-owned calendars and events. The lower-level `deleteMissingCalendars` and `deleteMissingEvents` flags still exist for provider-specific cleanup policies.
+
+## Reconcile Database Records
+
+Use `reconcileProviderCalendars` and `reconcileProviderEvents` when your application stores provider records in a database before applying them to DayFlow.
+
+```ts
+import {
+  reconcileProviderCalendars,
+  reconcileProviderEvents,
+} from '@dayflow/sync-core';
+
+const calendarResult = await reconcileProviderCalendars({
+  provider: 'custom',
+  remoteCalendars,
+  existingCalendars: await db.calendar.findMany({ where: { accountId } }),
+  getRemoteCalendarId: remote => remote.id,
+  getRecordId: record => record.id,
+  getRecordExternalCalendarId: record => record.externalCalendarId,
+  mapRemoteCalendar: (remote, existing) => ({
+    id: existing?.id ?? crypto.randomUUID(),
+    accountId,
+    provider: 'custom',
+    externalCalendarId: remote.id,
+    name: remote.name,
+    color: remote.color ?? null,
+    readOnly: remote.readOnly,
+    syncEnabled: existing?.syncEnabled ?? true,
+    syncToken: existing?.syncToken ?? null,
+    syncStatus: 'idle',
+  }),
+  save: records => db.calendar.upsertMany(records),
+  deactivate: records =>
+    db.calendar.updateMany(
+      records.map(record => ({ ...record, syncEnabled: false }))
+    ),
+});
+
+const eventResult = await reconcileProviderEvents({
+  provider: 'custom',
+  calendarId: localCalendar.id,
+  remoteEvents,
+  deletedRemoteEvents,
+  existingRecords: await db.event.findMany({
+    where: { calendarId: localCalendar.id },
+  }),
+  getRemoteEventId: remote => remote.id,
+  getDeletedRemoteEventId: deleted => deleted.id,
+  getRecordExternalEventId: record => record.externalEventId,
+  isRecordDeleted: record => Boolean(record.deletedAt),
+  mapRemoteEvent: (remote, existing) => ({
+    id: existing?.id ?? crypto.randomUUID(),
+    accountId,
+    calendarId: localCalendar.id,
+    provider: 'custom',
+    externalEventId: remote.id,
+    title: remote.title,
+    description: remote.description ?? null,
+    startsAt: remote.startsAt,
+    endsAt: remote.endsAt,
+    timezone: remote.timezone ?? null,
+    allDay: remote.allDay,
+    location: remote.location ?? null,
+    rawData: remote,
+    externalUpdatedAt: remote.updatedAt ?? null,
+    localUpdatedAt: existing?.localUpdatedAt ?? null,
+    syncStatus: 'synced',
+    deletedAt: null,
+  }),
+  save: records => db.event.upsertMany(records),
+  softDelete: record =>
+    db.event.update(record.id, { deletedAt: new Date().toISOString() }),
+});
+
+await db.syncHistory.insertMany([
+  ...calendarResult.changes,
+  ...eventResult.changes,
+]);
+```
+
+The helpers return normalized change objects such as `calendar.created`, `event.updated`, and `event.deleted`. Your app decides whether those changes become audit logs, notifications, analytics, or nothing at all.
+
+## When Not to Use It
+
+Do not add `@dayflow/sync-core` just to connect a standard remote calendar. The provider packages already use the right sync-core helpers internally and include provider-specific mapping, metadata, permissions, write-back behavior, and DayFlow attachment controllers.
+
+Use it directly only when you are crossing one of these boundaries:
+
+| Boundary                | Why sync-core helps                                                                 |
+| :---------------------- | :---------------------------------------------------------------------------------- |
+| Custom provider package | Share the same DayFlow apply behavior as the official providers.                    |
+| Backend-led sync        | Reconcile provider records into your database before rendering DayFlow.             |
+| Audit/history pipeline  | Consume normalized `SyncChange` objects without tying history to provider adapters. |
+| Id strategy migration   | Match by stable provider identity while changing DayFlow local ids.                 |

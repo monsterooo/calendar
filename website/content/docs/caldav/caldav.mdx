@@ -46,7 +46,12 @@ function MyCalendar() {
     const sync = createCalDAVSync({ adapter });
     const controller = attachCalDAVToDayFlow(calendar.app, sync, {
       writable: true,
-      refreshOnVisibleRangeChange: true,
+      maxConcurrentCalendars: 4,
+      onSyncComplete: delta => {
+        console.log(
+          `Sync done: +${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+        );
+      },
     });
 
     controllerRef.current = controller;
@@ -64,22 +69,36 @@ function MyCalendar() {
 
 ## Calendar Home Discovery
 
-If you don't know the calendar home URL upfront, use `discoverCalendarHome` to find it dynamically from the server root:
+For servers that require dynamic discovery (such as iCloud), use `createCalDAVAdapterFromServer` — it runs the two-step PROPFIND and returns a ready adapter in one call:
 
 ```ts
-import { discoverCalendarHome, ICLOUD_CALDAV_SERVER } from '@dayflow/caldav';
+import {
+  createCalDAVAdapterFromServer,
+  ICLOUD_CALDAV_SERVER,
+} from '@dayflow/caldav';
 
-// iCloud
+const adapter = await createCalDAVAdapterFromServer(ICLOUD_CALDAV_SERVER, {
+  fetch: proxiedFetch,
+});
+```
+
+If you need the home URL separately (for caching or logging), use the lower-level `discoverCalendarHome`:
+
+```ts
+import {
+  discoverCalendarHome,
+  createCalDAVAdapter,
+  ICLOUD_CALDAV_SERVER,
+} from '@dayflow/caldav';
+
 const calendarHomeUrl = await discoverCalendarHome(
   ICLOUD_CALDAV_SERVER,
   authenticatedFetch
 );
-
-// Any RFC 4791 server
-const calendarHomeUrl = await discoverCalendarHome(
-  'https://nextcloud.example.com/remote.php/dav/',
-  authenticatedFetch
-);
+const adapter = createCalDAVAdapter({
+  calendarHomeUrl,
+  fetch: authenticatedFetch,
+});
 ```
 
 `discoverCalendarHome` performs a two-step PROPFIND:
@@ -96,22 +115,18 @@ Use the built-in presets to construct the correct `calendarHomeUrl` for known pr
 ```ts
 import {
   ICLOUD_CALDAV_SERVER,
+  createCalDAVAdapterFromServer,
   nextcloudConfig,
   radicaleConfig,
   fastmailConfig,
-  discoverCalendarHome,
   createCalDAVAdapter,
 } from '@dayflow/caldav';
 
 // iCloud — must always discover dynamically
-const icloudHomeUrl = await discoverCalendarHome(
+const icloudAdapter = await createCalDAVAdapterFromServer(
   ICLOUD_CALDAV_SERVER,
-  proxiedFetch
+  { fetch: proxiedFetch }
 );
-const icloudAdapter = createCalDAVAdapter({
-  calendarHomeUrl: icloudHomeUrl,
-  fetch: proxiedFetch,
-});
 
 // Nextcloud
 const nextcloudAdapter = createCalDAVAdapter({
@@ -136,7 +151,7 @@ const fastmailAdapter = createCalDAVAdapter({
 
 iCloud CalDAV requires an **app-specific password** — not your Apple ID password. Generate one at [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords.
 
-iCloud does not support browser CORS, so a backend proxy is required for all requests, including `discoverCalendarHome`.
+iCloud does not support browser CORS, so a backend proxy is required for all requests, including discovery.
 
 iCloud-specific behavior handled automatically by the adapter:
 
@@ -158,6 +173,60 @@ Radicale typically does not return `current-user-privilege-set`, so the adapter 
 ### Fastmail
 
 Fastmail supports standard CalDAV. Use `fastmailConfig` with your Fastmail email address as the username.
+
+## Local Cache Hydration
+
+If you persist synced events in a database or local store (e.g. Supabase, IndexedDB), you can seed DayFlow before the first remote sync so the calendar renders immediately:
+
+```ts
+const controller = attachCalDAVToDayFlow(calendar.app, sync, {
+  getInitialSnapshot: async () => {
+    const { calendars, events } = await loadFromLocalDB();
+    return { calendars, events };
+  },
+  onSyncComplete: delta => {
+    // Save what changed to your local store
+    console.log(
+      `+${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+    );
+  },
+  onWriteComplete: (operation, event) => {
+    // Update local store after a successful write-back
+    persistEvent(operation, event);
+  },
+});
+```
+
+`getInitialSnapshot` is called once during `start()`, before any CalDAV requests are made. DayFlow renders with cached data while the background sync runs. Errors from `getInitialSnapshot` are passed to `onError` and do not abort the remote sync.
+
+## Applying a Remote Snapshot Manually
+
+For applications that manage their own sync orchestration (e.g. syncing via a backend job rather than directly from the browser), `applyRemoteSnapshot` applies a batch of remote events to DayFlow without triggering write-back:
+
+```ts
+import { applyRemoteSnapshot, getCalDAVMeta } from '@dayflow/caldav';
+
+const delta = await applyRemoteSnapshot(
+  calendar.app,
+  { calendars, events },
+  {
+    // Identify events owned by this provider so stale ones are cleaned up
+    isOwnedEvent: event => Boolean(getCalDAVMeta(event)),
+    isOwnedCalendar: calendar => calendar.source === 'iCloud',
+    snapshotMode: 'authoritative',
+
+    // Optionally preserve local in-progress edits during optimistic sync
+    resolveConflict: (remote, local) =>
+      mergeLocalEditsOntoRemote(remote, local),
+  }
+);
+
+console.log(delta.events.added, delta.events.updated, delta.events.deleted);
+```
+
+`applyRemoteSnapshot` computes the diff between the incoming snapshot and the current app state, then applies changes with `source: 'remote'` to prevent write-back loops. It returns a `RemoteSnapshotDelta` with counts per operation.
+
+Snapshots are treated as partial by default, so owned local records missing from the snapshot are preserved. Pass `snapshotMode: 'authoritative'` only when the snapshot fully represents all provider-owned calendars and events. For visible-range, filtered, or paginated responses, keep the default partial mode or explicitly set `deleteMissingEvents: false` and `deleteMissingCalendars: false`.
 
 ## Backend Proxy
 
@@ -242,14 +311,28 @@ node proxy.mjs
 
 ### `attachCalDAVToDayFlow` Options
 
-| Option                        | Type                       | Default       | Description                                                      |
-| :---------------------------- | :------------------------- | :------------ | :--------------------------------------------------------------- |
-| `writable`                    | `boolean`                  | `true`        | Allow local mutations to be written back to the CalDAV server.   |
-| `refreshOnVisibleRangeChange` | `boolean`                  | `true`        | Re-sync when the user navigates to a new date range.             |
-| `eventMode.recurring`         | `'read-only'`              | `'read-only'` | Recurring events are read-only. Only `'read-only'` is supported. |
-| `onError`                     | `(error, context) => void` | —             | Called on any sync or write failure.                             |
+| Option                        | Type                                   | Default       | Description                                                                                      |
+| :---------------------------- | :------------------------------------- | :------------ | :----------------------------------------------------------------------------------------------- |
+| `writable`                    | `boolean`                              | `true`        | Allow local mutations to be written back to the CalDAV server.                                   |
+| `refreshOnVisibleRangeChange` | `boolean`                              | `true`        | Re-sync when the user navigates to a new date range.                                             |
+| `maxConcurrentCalendars`      | `number`                               | `4`           | Maximum number of remote calendars to sync in parallel.                                          |
+| `eventMode.recurring`         | `'read-only'`                          | `'read-only'` | Recurring events are read-only. Only `'read-only'` is supported.                                 |
+| `onError`                     | `(error, context) => void`             | —             | Called on any sync or write failure.                                                             |
+| `getInitialSnapshot`          | `() => Promise<{ events, calendars }>` | —             | Seed DayFlow from a local cache before the first remote sync. Errors are passed to `onError`.    |
+| `onSyncComplete`              | `(delta: CalDAVSyncDelta) => void`     | —             | Called after each successful sync with counts of what changed.                                   |
+| `onWriteComplete`             | `(operation, event) => void`           | —             | Called after a local mutation is successfully written back to the CalDAV server.                 |
+| `createEventId`               | `(input) => string`                    | namespaced    | Build DayFlow ids for remote CalDAV events. Defaults to provider-scoped ids to avoid collisions. |
 
 `CalDAVErrorContext` includes `operation` (`'list-calendars'` \| `'initial-sync'` \| `'range-sync'` \| `'create'` \| `'update'` \| `'delete'`), `calendarId`, and `eventId`.
+
+`CalDAVSyncDelta`:
+
+```ts
+type CalDAVSyncDelta = {
+  calendars: { added: number; updated: number; deleted: number };
+  events: { added: number; updated: number; deleted: number };
+};
+```
 
 ### `createCalDAVAdapter` Options
 
@@ -257,6 +340,15 @@ node proxy.mjs
 | :---------------- | :--------- | :------- | :-------------------------------------------------------------- |
 | `calendarHomeUrl` | `string`   | ✓        | The CalDAV calendar home collection URL.                        |
 | `fetch`           | `function` | ✓        | Authenticated fetch function. Route through your backend proxy. |
+
+### `createCalDAVAdapterFromServer` Options
+
+| Parameter   | Type     | Description                                                     |
+| :---------- | :------- | :-------------------------------------------------------------- |
+| `serverUrl` | `string` | CalDAV server root URL (e.g. `ICLOUD_CALDAV_SERVER`).           |
+| `options`   | `object` | Same as `createCalDAVAdapter` options, minus `calendarHomeUrl`. |
+
+Performs discovery internally and returns a ready `CalDAVAdapter`.
 
 ## Controller API
 
@@ -285,23 +377,74 @@ const status = controller.getStatus();
 
 ## Storage Interface
 
-`createCalDAVSync` accepts an optional `storage` object for persisting sync tokens and ETags across page reloads. If not provided, sync state is kept in memory only.
+`createCalDAVSync` accepts an optional `storage` object for persisting sync tokens, calendar ctags, and ETags across page reloads. If not provided, sync state is kept in memory only. That default is useful for tests and demos, but production apps should provide durable storage so incremental sync and conditional writes survive reloads.
 
 ```ts
 import { createCalDAVSync, type CalDAVStorage } from '@dayflow/caldav';
 
 const storage: CalDAVStorage = {
   getSyncToken: async calendarId =>
-    localStorage.getItem(`sync:${calendarId}`) ?? undefined,
-  setSyncToken: async (calendarId, token) =>
-    localStorage.setItem(`sync:${calendarId}`, token),
-  deleteSyncToken: async calendarId =>
-    localStorage.removeItem(`sync:${calendarId}`),
+    localStorage.getItem(`sync:${calendarId}`) ?? null,
+  setSyncToken: async (calendarId, token) => {
+    if (token) localStorage.setItem(`sync:${calendarId}`, token);
+    else localStorage.removeItem(`sync:${calendarId}`);
+  },
 
-  getEtag: async uid => localStorage.getItem(`etag:${uid}`) ?? undefined,
-  setEtag: async (uid, etag) => localStorage.setItem(`etag:${uid}`, etag),
-  deleteEtag: async uid => localStorage.removeItem(`etag:${uid}`),
+  getCtag: async calendarId =>
+    localStorage.getItem(`ctag:${calendarId}`) ?? null,
+  setCtag: async (calendarId, ctag) =>
+    localStorage.setItem(`ctag:${calendarId}`, ctag),
+
+  getEtag: async href => localStorage.getItem(`etag:${href}`) ?? null,
+  setEtag: async (href, etag) => localStorage.setItem(`etag:${href}`, etag),
+  deleteEtag: async href => localStorage.removeItem(`etag:${href}`),
+
+  getEventState: async id =>
+    JSON.parse(localStorage.getItem(`event:${id}`) ?? 'null'),
+  setEventState: async (id, state) =>
+    localStorage.setItem(`event:${id}`, JSON.stringify(state)),
+  deleteEventState: async id => localStorage.removeItem(`event:${id}`),
+
+  clearCalendar: async calendarId => {
+    for (const key of Object.keys(localStorage)) {
+      if (
+        key.startsWith(`sync:${calendarId}`) ||
+        key.startsWith(`ctag:${calendarId}`)
+      ) {
+        localStorage.removeItem(key);
+      }
+    }
+  },
 };
 
-const sync = createCalDAVSync({ adapter, storage });
+const sync = createCalDAVSync({
+  adapter,
+  storage,
+  // Optional: split broad visible-range REPORTs into smaller windows.
+  rangeChunkDays: 31,
+});
 ```
+
+When calendar `ctag` values are available, collection-wide syncs can skip network work if the collection has not changed since the last completed sync. Visible-range syncs still query the requested range so navigating into a new range can load previously unseen events.
+
+## Event Identity
+
+The DayFlow binding uses provider-scoped ids for remote CalDAV events by default:
+
+```ts
+import { createNamespacedCalDAVEventId } from '@dayflow/caldav';
+
+const controller = attachCalDAVToDayFlow(calendar.app, sync, {
+  createEventId: createNamespacedCalDAVEventId,
+});
+```
+
+Direct mapper calls keep UID-as-id compatibility unless you pass a factory:
+
+```ts
+const event = mapCalDAVEventToDayFlow(data, {
+  createEventId: createNamespacedCalDAVEventId,
+});
+```
+
+This avoids collisions with local events and other providers while still matching existing events by CalDAV metadata during sync.

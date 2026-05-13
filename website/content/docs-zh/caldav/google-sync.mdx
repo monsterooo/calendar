@@ -1,0 +1,219 @@
+# @dayflow/google-sync
+
+`@dayflow/google-sync` 将 DayFlow 连接到 Google 日历 REST API v3。它是一个独立于 `@dayflow/caldav` 的包 —— 它直接使用 Google 日历 API，而不是 CalDAV。
+
+## 安装
+
+<PackageTabs pkg='@dayflow/google-sync' />
+
+## 快速开始
+
+```tsx
+import { useRef, useEffect, useState } from 'react';
+import {
+  DayFlowCalendar,
+  useCalendarApp,
+  createMonthView,
+} from '@dayflow/react';
+import {
+  attachGoogleSyncToDayFlow,
+  createGoogleSync,
+  createGoogleSyncAdapter,
+  type GoogleDayFlowController,
+  type GoogleSyncStatus,
+} from '@dayflow/google-sync';
+
+function MyCalendar() {
+  const calendar = useCalendarApp({
+    views: [createMonthView()],
+    calendars: [],
+    events: [],
+  });
+
+  const controllerRef = useRef<GoogleDayFlowController | null>(null);
+  const [syncStatus, setSyncStatus] = useState<GoogleSyncStatus>({
+    state: 'idle',
+  });
+
+  useEffect(() => {
+    if (controllerRef.current) return;
+
+    const adapter = createGoogleSyncAdapter({
+      baseUrl: '/api/google-calendar',
+    });
+
+    const sync = createGoogleSync(adapter);
+    const controller = attachGoogleSyncToDayFlow(calendar.app, sync, {
+      writable: true,
+      onStatusChange: setSyncStatus,
+      onWriteError: (error, ctx) =>
+        console.error(`[google-sync] ${ctx.action} 失败:`, error.message),
+      onSyncComplete: delta => {
+        console.log(
+          `同步完成: +${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+        );
+      },
+    });
+
+    controllerRef.current = controller;
+    controller.start();
+
+    return () => {
+      controller.stop();
+      controllerRef.current = null;
+    };
+  }, [calendar.app]);
+
+  return <DayFlowCalendar calendar={calendar} />;
+}
+```
+
+## 令牌注入
+
+### 使用 `getToken`（推荐用于客户端令牌）
+
+当您在运行时有可用的令牌（例如来自 Supabase 会话或身份验证提供程序）时，请使用 `getToken`。它在每次请求之前被调用，因此令牌刷新是透明的 —— 当令牌更改时，适配器永远不需要重新创建：
+
+```ts
+const adapter = createGoogleSyncAdapter({
+  getToken: async () => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.provider_token ?? '';
+  },
+});
+```
+
+### 使用后端代理（推荐用于生产环境）
+
+Google 日历 API 支持 CORS，但从浏览器发送 OAuth 令牌会将其暴露给任何可以检查网络请求的人。对于生产环境，请将令牌保留在服务器上：
+
+```ts
+const adapter = createGoogleSyncAdapter({
+  baseUrl: '/api/google-calendar',
+  // 不需要 getToken — 您的代理会注入 Authorization
+});
+```
+
+（中略：代理示例与英文文档相同）
+
+## 同步令牌持久化
+
+默认情况下，Google 日历同步令牌存储在内存中，在页面重新加载时会丢失，导致下一个会话进行完整同步。提供一个 `GoogleSyncStorage` 实现来持久化它们：
+
+```ts
+import { createGoogleSync, type GoogleSyncStorage } from '@dayflow/google-sync';
+
+const storage: GoogleSyncStorage = {
+  getSyncToken: async calendarId =>
+    localStorage.getItem(`google-token:${calendarId}`),
+  setSyncToken: async (calendarId, token) =>
+    token
+      ? localStorage.setItem(`google-token:${calendarId}`, token)
+      : localStorage.removeItem(`google-token:${calendarId}`),
+};
+
+const sync = createGoogleSync(adapter, { storage });
+```
+
+通过 `storage`，每个会话开始时都会进行增量同步，而不是从头开始获取所有事件。
+
+## 本地缓存加载
+
+如果您将同步的事件持久化在数据库或本地存储中，您可以在第一次远程同步之前为 DayFlow 设定种子，以便日历立即呈现：
+
+```ts
+const controller = attachGoogleSyncToDayFlow(calendar.app, sync, {
+  getInitialSnapshot: async () => {
+    const { calendars, events } = await loadFromLocalDB();
+    return { calendars, events };
+  },
+  onSyncComplete: delta => {
+    // 保存更改到您的本地存储
+    saveChanges(delta);
+  },
+  onWriteComplete: (operation, event) => {
+    // 成功写回后更新本地存储
+    persistEvent(operation, event);
+  },
+});
+```
+
+`getInitialSnapshot` 在 `start()` 期间调用一次，在进行任何 Google 日历 API 请求之前。DayFlow 在后台同步运行时使用缓存数据呈现。
+
+## 手动应用远程快照
+
+对于管理自己同步编排的应用，`applyRemoteSnapshot` 在不触发写回的情况下将一批远程事件应用到 DayFlow：
+
+```ts
+import { applyRemoteSnapshot, getGoogleMeta } from '@dayflow/google-sync';
+
+const delta = await applyRemoteSnapshot(
+  calendar.app,
+  { calendars, events },
+  {
+    isOwnedEvent: event => Boolean(getGoogleMeta(event)),
+    isOwnedCalendar: calendar => calendar.source === 'Google',
+    snapshotMode: 'authoritative',
+
+    // 在乐观同步期间保留正在进行的本地编辑（可选）
+    resolveConflict: (remote, local) =>
+      mergeLocalEditsOntoRemote(remote, local),
+  }
+);
+
+console.log(delta.events.added, delta.events.updated, delta.events.deleted);
+```
+
+（中略：详细信息与英文文档相同）
+
+## 选项参考
+
+### `attachGoogleSyncToDayFlow` 选项
+
+| 选项                 | 类型                                   | 默认值          | 描述                                                               |
+| :------------------- | :------------------------------------- | :-------------- | :----------------------------------------------------------------- |
+| `writable`           | `boolean`                              | `true`          | 允许将本地更改写回 Google 日历。                                   |
+| `onStatusChange`     | `(status: GoogleSyncStatus) => void`   | —               | 每当同步状态更改时调用。                                           |
+| `onWriteError`       | `(error: Error, ctx) => void`          | `console.error` | 当创建/更新/删除写回失败时调用。`ctx` 包括 `action` 和 `eventId`。 |
+| `getInitialSnapshot` | `() => Promise<{ events, calendars }>` | —               | 在第一次远程同步之前从本地缓存中为 DayFlow 设定种子。              |
+| `onSyncComplete`     | `(delta: GoogleSyncDelta) => void`     | —               | 在每次成功同步后调用，包含更改计数。                               |
+| `onWriteComplete`    | `(operation, event) => void`           | —               | 在本地变更成功写回 Google 日历后调用。                             |
+
+### `createGoogleSyncAdapter` 选项
+
+（中略：表项与英文相同）
+
+## 同步原理
+
+### 日历发现
+
+在 `controller.start()` 时，包获取经过身份验证的用户的日历列表 (`GET /calendarList`) 并将每个日历注册为 DayFlow 中的 `CalendarType`。具有 `accessRole: 'reader'` 或 `'freeBusyReader'` 的日历被标记为 `readOnly: true`。
+
+### 事件加载
+
+加载当前可见日期范围的事件。当用户导航（前进一周、后退一月等）时，新范围的事件会自动通过可见范围更改侦听器加载。
+
+### 增量同步
+
+初始加载后，包使用 Google 日历的 `syncToken` 进行增量同步 —— 仅获取后续同步中更改的事件。提供 `GoogleSyncStorage` 时，同步令牌会跨页面重新加载持久化，因此下一个会话也会以增量方式开始。
+
+### 写回
+
+当 `writable: true` 时，本地事件更改（创建、更新、删除）会自动写回 Google 日历：
+
+- **创建**: `POST /calendars/{calendarId}/events`
+- **更新**: `PUT /calendars/{calendarId}/events/{eventId}` (`If-Match: <etag>` 付き)
+- **删除**: `DELETE /calendars/{calendarId}/events/{eventId}`
+
+如果更新返回 **412 Precondition Failed**（ETag 冲突 —— 事件在另一个设备上已更改），包会自动重新获取最新的 ETag 并重试一次更新。
+
+重复事件**永不**写回 —— 它们是只读的。
+
+## Google 日历 API 范围
+
+您的 OAuth 令牌必须包含以下至少一个范围：
+
+| 范围                                                | 访问权限                                  |
+| :-------------------------------------------------- | :---------------------------------------- |
+| `https://www.googleapis.com/auth/calendar`          | 完全读/写访问权限                         |
+| `https://www.googleapis.com/auth/calendar.readonly` | 只读访问权限 (`writable: false` 一起使用) |

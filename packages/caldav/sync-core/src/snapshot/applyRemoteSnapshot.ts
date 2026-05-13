@@ -25,18 +25,30 @@ export type RemoteSnapshotOptions = {
   resolveConflict?: (remote: Event, local: Event) => Event;
 
   /**
+   * Describe whether the snapshot fully represents the provider-owned records.
+   *
+   * - `partial` is safe for visible-range, filtered, or paginated provider
+   *   responses and does not delete missing local records by default.
+   * - `authoritative` means any owned local record missing from the snapshot
+   *   should be removed.
+   *
+   * Defaults to `partial`.
+   */
+  snapshotMode?: 'partial' | 'authoritative';
+
+  /**
    * Delete owned local calendars that are missing from the snapshot.
    *
-   * Defaults to true for backward compatibility. Set false when the snapshot is
-   * partial, such as a filtered or range-scoped provider response.
+   * Defaults to `snapshotMode === 'authoritative'`. Override only when your
+   * application has a provider-specific cleanup policy.
    */
   deleteMissingCalendars?: boolean;
 
   /**
    * Delete owned local events that are missing from the snapshot.
    *
-   * Defaults to true for backward compatibility. Set false when the snapshot is
-   * partial, such as a visible-range sync.
+   * Defaults to `snapshotMode === 'authoritative'`. Override only when your
+   * application has a provider-specific cleanup policy.
    */
   deleteMissingEvents?: boolean;
 };
@@ -60,8 +72,11 @@ export async function applyRemoteSnapshot(
 ): Promise<RemoteSnapshotDelta> {
   const { isOwnedEvent, isOwnedCalendar } = options;
   const resolve = options.resolveConflict ?? (remote => remote);
-  const deleteMissingCalendars = options.deleteMissingCalendars ?? true;
-  const deleteMissingEvents = options.deleteMissingEvents ?? true;
+  const snapshotMode = options.snapshotMode ?? 'partial';
+  const deleteMissingCalendars =
+    options.deleteMissingCalendars ?? snapshotMode === 'authoritative';
+  const deleteMissingEvents =
+    options.deleteMissingEvents ?? snapshotMode === 'authoritative';
 
   const nextCalendarIds = new Set(snapshot.calendars.map(c => c.id));
   const existingOwnedCalendars = app.getCalendars().filter(isOwnedCalendar);

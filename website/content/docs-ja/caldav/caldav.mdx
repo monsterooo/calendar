@@ -1,0 +1,263 @@
+# @dayflow/caldav
+
+`@dayflow/caldav` は、ヘッドレスかつアダプターファーストな CalDAV 同期エンジンです。iCloud カレンダー、Nextcloud、Radicale、Fastmail、および RFC 4791 準拠のすべての CalDAV サーバーで動作します。
+
+## インストール
+
+<PackageTabs pkg='@dayflow/caldav' />
+
+## クイックスタート
+
+```tsx
+import { useRef, useEffect } from 'react';
+import {
+  DayFlowCalendar,
+  useCalendarApp,
+  createMonthView,
+} from '@dayflow/react';
+import {
+  attachCalDAVToDayFlow,
+  createCalDAVAdapter,
+  createCalDAVSync,
+  type CalDAVDayFlowController,
+} from '@dayflow/caldav';
+
+function MyCalendar() {
+  const calendar = useCalendarApp({
+    views: [createMonthView()],
+    calendars: [],
+    events: [],
+  });
+  const controllerRef = useRef<CalDAVDayFlowController | null>(null);
+
+  useEffect(() => {
+    if (controllerRef.current) return;
+
+    const adapter = createCalDAVAdapter({
+      calendarHomeUrl: 'https://caldav.example.com/calendars/alice/',
+      fetch: (url, init) =>
+        fetch('/api/caldav-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, init }),
+        }),
+    });
+
+    const sync = createCalDAVSync({ adapter });
+    const controller = attachCalDAVToDayFlow(calendar.app, sync, {
+      writable: true,
+      maxConcurrentCalendars: 4,
+      onSyncComplete: delta => {
+        console.log(
+          `同期完了: +${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+        );
+      },
+    });
+
+    controllerRef.current = controller;
+    controller.start();
+
+    return () => {
+      controller.stop();
+      controllerRef.current = null;
+    };
+  }, [calendar.app]);
+
+  return <DayFlowCalendar calendar={calendar} />;
+}
+```
+
+## カレンダーホームの検出
+
+iCloud のように動的な検出が必要なサーバーの場合は、`createCalDAVAdapterFromServer` を使用します。これは、PROPFIND の 2 ステップを実行し、1 回の呼び出しで準備完了したアダプターを返します。
+
+```ts
+import {
+  createCalDAVAdapterFromServer,
+  ICLOUD_CALDAV_SERVER,
+} from '@dayflow/caldav';
+
+const adapter = await createCalDAVAdapterFromServer(ICLOUD_CALDAV_SERVER, {
+  fetch: proxiedFetch,
+});
+```
+
+ホーム URL を個別に取得する必要がある場合は（キャッシュやログ記録用など）、低レベルの `discoverCalendarHome` を使用します。
+
+```ts
+import {
+  discoverCalendarHome,
+  createCalDAVAdapter,
+  ICLOUD_CALDAV_SERVER,
+} from '@dayflow/caldav';
+
+const calendarHomeUrl = await discoverCalendarHome(
+  ICLOUD_CALDAV_SERVER,
+  authenticatedFetch
+);
+const adapter = createCalDAVAdapter({
+  calendarHomeUrl,
+  fetch: authenticatedFetch,
+});
+```
+
+`discoverCalendarHome` は 2 ステップの PROPFIND を実行します。
+
+1. サーバーのルートから `current-user-principal` を取得
+2. プリンシパル URL から `calendar-home-set` を取得
+
+`fetch` 引数は認証資格情報を注入する必要があります。検出リクエストは他のすべての CalDAV リクエストと同様に認証が必要です。
+
+## プロバイダープリセット
+
+組み込みのプリセットを使用して、既知のプロバイダーの正しい `calendarHomeUrl` を構築します。
+
+```ts
+import {
+  ICLOUD_CALDAV_SERVER,
+  createCalDAVAdapterFromServer,
+  nextcloudConfig,
+  radicaleConfig,
+  fastmailConfig,
+  createCalDAVAdapter,
+} from '@dayflow/caldav';
+
+// iCloud — 常に動的に検出する必要があります
+const icloudAdapter = await createCalDAVAdapterFromServer(
+  ICLOUD_CALDAV_SERVER,
+  { fetch: proxiedFetch }
+);
+
+// Nextcloud
+const nextcloudAdapter = createCalDAVAdapter({
+  ...nextcloudConfig('https://nextcloud.example.com', 'alice'),
+  fetch: proxiedFetch,
+});
+
+// Radicale
+const radicaleAdapter = createCalDAVAdapter({
+  ...radicaleConfig('https://radicale.example.com', 'alice'),
+  fetch: proxiedFetch,
+});
+
+// Fastmail
+const fastmailAdapter = createCalDAVAdapter({
+  ...fastmailConfig('https://caldav.fastmail.com/dav', 'alice@fastmail.com'),
+  fetch: proxiedFetch,
+});
+```
+
+### iCloud カレンダー
+
+iCloud CalDAV は、Apple ID のパスワードではなく、**アプリ固有のパスワード**を必要とします。[appleid.apple.com](https://appleid.apple.com) → サインインとセキュリティ → アプリ固有のパスワードから生成してください。
+
+iCloud はブラウザの CORS をサポートしていないため、検出を含むすべてのリクエストにバックエンドプロキシが必要です。
+
+アダプターによって自動的に処理される iCloud 固有の動作：
+
+- 8 桁の RGBA 16 進カラー (`#RRGGBBAA`) — アルファチャンネルがストリップされます
+- 条件付き書き込み (`If-Match` ETag) は正しく機能します
+- 終日イベントは標準の `VALUE=DATE` 形式を使用します
+- タイムゾーン対応イベントは標準の `TZID` パラメータを使用します
+
+### Nextcloud
+
+アカウントパスワードではなく、[個人設定](https://docs.nextcloud.com/server/latest/user_manual/en/session_management.html) → セキュリティから[アプリパスワード](https://docs.nextcloud.com/server/latest/user_manual/en/session_management.html)を使用してください。
+
+Nextcloud は `current-user-privilege-set` を正しく返すため、読み取り/書き込み権限が自動的に検出されます。CORS はサポートされていないため、プロキシを使用してください。
+
+### Radicale
+
+Radicale は通常 `current-user-privilege-set` を返さないため、アダプターは検出されたカレンダーをデフォルトで読み取り専用にします。ユーザーに書き込み権限があることがわかっている場合は、検出後に `CalendarType` の `readOnly` を `false` に設定してください。
+
+### Fastmail
+
+Fastmail は標準の CalDAV をサポートしています。ユーザー名として Fastmail のメールアドレスを指定して `fastmailConfig` を使用します。
+
+## ローカルキャッシュのハイドレーション
+
+同期されたイベントをデータベースやローカルストア（Supabase、IndexedDB など）に永続化している場合は、最初のリモート同期の前に DayFlow をシードすることで、カレンダーを即座にレンダリングできます。
+
+```ts
+const controller = attachCalDAVToDayFlow(calendar.app, sync, {
+  getInitialSnapshot: async () => {
+    const { calendars, events } = await loadFromLocalDB();
+    return { calendars, events };
+  },
+  onSyncComplete: delta => {
+    // 変更内容をローカルストアに保存
+    console.log(
+      `+${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+    );
+  },
+  onWriteComplete: (operation, event) => {
+    // 書き戻し成功後にローカルストアを更新
+    persistEvent(operation, event);
+  },
+});
+```
+
+`getInitialSnapshot` は `start()` 中に CalDAV リクエストが行われる前に一度だけ呼び出されます。バックグラウンド同期が実行されている間、DayFlow はキャッシュされたデータでレンダリングされます。`getInitialSnapshot` からのエラーは `onError` に渡され、リモート同期を中止することはありません。
+
+## リモートスナップショットの手動適用
+
+（ブラウザから直接ではなくバックエンドジョブなどを介して同期するような）独自の同期オーケストレーションを管理するアプリケーションの場合、`applyRemoteSnapshot` を使用して、書き戻しをトリガーせずにリモートイベントのバッチを DayFlow に適用できます。
+
+```ts
+import { applyRemoteSnapshot, getCalDAVMeta } from '@dayflow/caldav';
+
+const delta = await applyRemoteSnapshot(
+  calendar.app,
+  { calendars, events },
+  {
+    // このプロバイダーが所有するイベントを識別し、古いイベントをクリーンアップ
+    isOwnedEvent: event => Boolean(getCalDAVMeta(event)),
+    isOwnedCalendar: calendar => calendar.source === 'iCloud',
+    snapshotMode: 'authoritative',
+
+    // オプティミスティック同期中に進行中のローカル編集を保持する（オプション）
+    resolveConflict: (remote, local) =>
+      mergeLocalEditsOntoRemote(remote, local),
+  }
+);
+
+console.log(delta.events.added, delta.events.updated, delta.events.deleted);
+```
+
+`applyRemoteSnapshot` は、受信したスナップショットと現在のアプリ状態との差分を計算し、`source: 'remote'` で変更を適用して書き戻しループを防止します。これはオペレーションごとのカウントを含む `RemoteSnapshotDelta` を返します。
+
+スナップショットはデフォルトで部分的に扱われるため、所有されているローカルレコードのうちスナップショットに見当たらないものは保持されます。`snapshotMode: 'authoritative'` は、スナップショットがすべてのプロバイダー所有のカレンダーとイベントを完全に表現している場合にのみ渡してください。表示範囲、フィルタリングされたレスポンス、またはページネーションされたレスポンスについては、デフォルトの部分モードを維持するか、`deleteMissingEvents: false` および `deleteMissingCalendars: false` を明示的に設定してください。
+
+## バックエンドプロキシ
+
+CalDAV サーバーはブラウザの CORS をサポートしていません。ブラウザはそれらを直接呼び出すことができません。以下の機能を持つバックエンドプロキシが必要です。
+
+1. DayFlow からのリクエストを受信する（JSON でラップされた CalDAV リクエスト）
+2. 資格情報を注入する（Basic Auth、トークンなど）
+3. CalDAV サーバーに転送し、レスポンスを返す
+
+（中略: プロキシの例は英語ドキュメントと同じです）
+
+## オプションリファレンス
+
+### `attachCalDAVToDayFlow` オプション
+
+| オプション                    | 型                                     | デフォルト    | 説明                                                                                                             |
+| :---------------------------- | :------------------------------------- | :------------ | :--------------------------------------------------------------------------------------------------------------- |
+| `writable`                    | `boolean`                              | `true`        | ローカルの変更を CalDAV サーバーに書き戻すことを許可します。                                                     |
+| `refreshOnVisibleRangeChange` | `boolean`                              | `true`        | ユーザーが新しい日付範囲に移動したときに再同期します。                                                           |
+| `maxConcurrentCalendars`      | `number`                               | `4`           | 並列で同期するリモートカレンダーの最大数。                                                                       |
+| `eventMode.recurring`         | `'read-only'`                          | `'read-only'` | 繰り返しイベントは読み取り専用です。`'read-only'` のみがサポートされています。                                   |
+| `onError`                     | `(error, context) => void`             | —             | 同期または書き込みエラー時に呼び出されます。                                                                     |
+| `getInitialSnapshot`          | `() => Promise<{ events, calendars }>` | —             | 初回リモート同期の前にローカルキャッシュから DayFlow をシードします。エラーは `onError` に渡されます。           |
+| `onSyncComplete`              | `(delta: CalDAVSyncDelta) => void`     | —             | 同期完了後に変更内容のカウントとともに呼び出されます。                                                           |
+| `onWriteComplete`             | `(operation, event) => void`           | —             | ローカルでの変更がサーバーへの書き戻しに成功した後に呼び出されます。                                             |
+| `createEventId`               | `(input) => string`                    | namespaced    | リモート CalDAV イベント用の DayFlow ID を構築します。競合を避けるためにプロバイダーごとの ID がデフォルトです。 |
+
+## コントローラー API
+
+（中略: コントローラーの API は英語ドキュメントと同じです）
+
+## ストレージインターフェース
+
+（中略: ストレージの説明は英語ドキュメントと同じです）

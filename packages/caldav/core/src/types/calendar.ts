@@ -8,6 +8,8 @@ export type CalDAVCalendar = {
   id: string;
   name: string;
   color?: string;
+  /** Collection change tag when the server exposes getctag. */
+  ctag?: string;
   readOnly?: boolean;
   permissions?: {
     canCreate?: boolean;

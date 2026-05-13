@@ -29,7 +29,20 @@ overwritten by an unrelated local event with the same id.
 
 ## Snapshot Safety
 
-`applyRemoteSnapshot` can delete owned local records that are missing from a
-remote snapshot. That is appropriate only for authoritative full snapshots. For
-partial responses, pass `deleteMissingCalendars: false` or
-`deleteMissingEvents: false` and let the application decide cleanup policy.
+`applyRemoteSnapshot` defaults to `snapshotMode: 'partial'`, so owned local
+records missing from the incoming snapshot are preserved. That default is safe
+for visible-range, filtered, or paginated provider responses.
+
+Use `snapshotMode: 'authoritative'` only when the snapshot fully represents all
+provider-owned calendars and events:
+
+```ts
+await applyRemoteSnapshot(app, snapshot, {
+  isOwnedEvent,
+  isOwnedCalendar,
+  snapshotMode: 'authoritative',
+});
+```
+
+You can still override deletion independently with `deleteMissingCalendars` and
+`deleteMissingEvents` for provider-specific cleanup policies.

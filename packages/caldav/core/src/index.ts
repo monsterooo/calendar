@@ -78,6 +78,7 @@ export {
   applyRemoteSnapshot,
   mapCalDAVCalendarToDayFlow,
   type CalDAVSync,
+  type CalDAVSyncOptions,
   type CalDAVDayFlowController,
   type CalDAVDayFlowOptions,
   type CalDAVSyncStatus,

@@ -1,11 +1,60 @@
 import { getCalDAVMeta } from '@caldav/mapper';
 import type { CalDAVAdapter } from '@caldav/types/adapter';
-import type { CalDAVRemoteRef, CalDAVWriteResult } from '@caldav/types/event';
+import type { CalDAVCalendar } from '@caldav/types/calendar';
+import type {
+  CalDAVRemoteRef,
+  CalDAVSyncResult,
+  CalDAVWriteResult,
+} from '@caldav/types/event';
 import type { CalDAVStorage } from '@caldav/types/storage';
 import type { Event } from '@dayflow/core';
 
 import { createMemoryCalDAVStorage } from './memoryStorage';
-import type { CalDAVSync } from './types';
+import type { CalDAVSync, CalDAVSyncOptions } from './types';
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function splitRange(
+  range: { start: Date; end: Date },
+  chunkDays: number
+): Array<{ start: Date; end: Date }> {
+  if (!Number.isFinite(chunkDays) || chunkDays <= 0) return [range];
+
+  const chunks: Array<{ start: Date; end: Date }> = [];
+  let start = new Date(range.start);
+  const end = new Date(range.end);
+  const chunkMs = chunkDays * MS_PER_DAY;
+
+  while (start < end) {
+    const next = new Date(Math.min(start.getTime() + chunkMs, end.getTime()));
+    chunks.push({ start, end: next });
+    start = next;
+  }
+
+  return chunks.length > 0 ? chunks : [range];
+}
+
+async function syncRangeInChunks(
+  adapter: CalDAVAdapter,
+  calendarId: string,
+  range: { start: Date; end: Date },
+  rangeChunkDays: number | undefined
+): Promise<CalDAVSyncResult> {
+  const chunks = splitRange(range, rangeChunkDays ?? 0);
+  if (chunks.length === 1) {
+    return adapter.syncEvents({ calendarId, range });
+  }
+
+  const byHref = new Map<string, CalDAVSyncResult['events'][number]>();
+  for (const chunk of chunks) {
+    const result = await adapter.syncEvents({ calendarId, range: chunk });
+    for (const event of result.events) {
+      byHref.set(event.href, event);
+    }
+  }
+
+  return { events: Array.from(byHref.values()), deleted: [] };
+}
 
 /**
  * Create a headless CalDAV sync engine.
@@ -16,29 +65,52 @@ import type { CalDAVSync } from './types';
 export function createCalDAVSync({
   adapter,
   storage = createMemoryCalDAVStorage(),
+  rangeChunkDays,
 }: {
   adapter: CalDAVAdapter;
   storage?: CalDAVStorage;
-}): CalDAVSync {
+} & CalDAVSyncOptions): CalDAVSync {
+  const calendarCtags = new Map<string, string>();
+
+  async function listCalendars(): Promise<CalDAVCalendar[]> {
+    const calendars = await adapter.listCalendars();
+    for (const calendar of calendars) {
+      if (calendar.ctag) {
+        calendarCtags.set(calendar.id, calendar.ctag);
+      }
+    }
+    return calendars;
+  }
+
   return {
-    listCalendars: () => adapter.listCalendars(),
+    listCalendars,
 
     async syncEvents({ calendarId, range }) {
+      const knownCtag = calendarCtags.get(calendarId);
+      const storedCtag = await storage.getCtag(calendarId);
+      if (!range && knownCtag !== undefined && storedCtag === knownCtag) {
+        return { events: [], deleted: [] };
+      }
+
       // Use stored sync tokens only for collection-wide sync. Visible-range
       // loading still needs a range REPORT so unchanged events in a newly
       // visible range are not skipped.
       const storedToken = range ? null : await storage.getSyncToken(calendarId);
-      const result = await adapter.syncEvents({
-        calendarId,
-        range,
-        syncToken: storedToken ?? undefined,
-      });
+      const result = range
+        ? await syncRangeInChunks(adapter, calendarId, range, rangeChunkDays)
+        : await adapter.syncEvents({
+            calendarId,
+            syncToken: storedToken ?? undefined,
+          });
 
       // Persist new sync token for the next incremental call
       if (result.syncToken) {
         await storage.setSyncToken(calendarId, result.syncToken);
       } else if (storedToken) {
         await storage.setSyncToken(calendarId, null);
+      }
+      if (knownCtag) {
+        await storage.setCtag(calendarId, knownCtag);
       }
 
       await Promise.all([

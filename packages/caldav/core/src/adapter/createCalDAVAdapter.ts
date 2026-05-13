@@ -37,6 +37,7 @@ const PROPFIND_BODY = `<?xml version="1.0" encoding="utf-8"?>
     <D:resourcetype/>
     <C:supported-calendar-component-set/>
     <D:current-user-privilege-set/>
+    <CS:getctag/>
     <IC:calendar-color/>
     <CS:calendar-color/>
   </D:prop>
@@ -109,6 +110,7 @@ function parseCalendars(xml: string): CalDAVCalendar[] {
     if (!id || !name) continue;
 
     const color = getCalendarColor(block);
+    const ctag = getFirstText(block, 'getctag') ?? undefined;
     const perms = getPrivileges(block);
     const hasAnyWrite =
       perms.canCreate === true ||
@@ -121,6 +123,7 @@ function parseCalendars(xml: string): CalDAVCalendar[] {
       id,
       name,
       color,
+      ctag,
       // Conservative default: read-only if no write privileges detected.
       // Radicale may omit current-user-privilege-set → treat as read-only.
       readOnly: hasNoPrivSet ? true : !hasAnyWrite,

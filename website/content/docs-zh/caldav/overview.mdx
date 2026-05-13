@@ -1,0 +1,441 @@
+# 远程同步概述
+
+DayFlow 提供了用于将日历连接到远程服务器的无头 (headless) 同步包：
+
+- **[`@dayflow/caldav`](/docs/caldav/caldav)** — CalDAV 同步引擎。适用于 iCloud Calendar、Nextcloud、Radicale、Fastmail 以及任何符合 RFC 4791 标准的 CalDAV 服务器。
+- **[`@dayflow/google-sync`](/docs/caldav/google-sync)** — Google Calendar REST API 同步引擎。
+- **[`@dayflow/outlook-sync`](/docs/caldav/outlook-sync)** — 通过 Microsoft Graph API 进行的 Microsoft Outlook Calendar 同步引擎。
+- **[`@dayflow/sync-core`](/docs/caldav/sync-core)** — 用于自定义提供程序和后端主导同步的与提供程序无关的协调助手。
+
+大多数应用程序应从提供程序包 (`@dayflow/caldav`, `@dayflow/google-sync` 或 `@dayflow/outlook-sync`) 开始。仅当您构建自己的提供程序包、在后端作业中协调远程数据或需要与提供程序无关的审计/历史记录更改时，才使用 `@dayflow/sync-core`。
+
+## 设计原则
+
+### 不在浏览器中存储凭据
+
+提供程序包不直接接受密码、令牌或 OAuth 密钥。所有身份验证都在后端进行。浏览器仅与您自己的代理服务器通信。
+
+```
+浏览器 (DayFlow)  →  您的后端代理  →  CalDAV / Google / Outlook API
+```
+
+这意味着 DayFlow 永远不会看到用户的凭据，并且您可以完全控制您的身份验证策略。
+
+### 以适配器为核心的传输
+
+每个提供程序包都采用用户提供的 `fetch` 函数进行传输。您注入一个已身份验证的 fetch — 同步引擎通过它执行请求，而无需知道附加了什么凭据。
+
+```ts
+const adapter = createCalDAVAdapter({
+  calendarHomeUrl: 'https://caldav.example.com/calendars/alice/',
+  fetch: (url, init) =>
+    fetch('/api/caldav-proxy', {
+      method: 'POST',
+      body: JSON.stringify({ url, init }),
+    }),
+});
+```
+
+### 可观察，而非规定
+
+提供程序包发出结构化回调，而不是拥有持久性：
+
+- **`onSyncComplete(delta)`** — 在每次同步后使用更改计数调用，因此您的存储可以做出反应而无需重新差异。
+- **`onWriteComplete(operation, event)`** — 在每次成功写回后调用，因此您可以使用服务器分配的 ID 更新本地数据库。
+- **`getInitialSnapshot()`** — 在启动时调用一次，以便在任何 API 请求之前从本地缓存中为 DayFlow 设定种子，从而使日历瞬间渲染。
+
+您拥有存储。包告诉您发生了什么。
+
+### 无头 (Headless)
+
+提供程序包不附带登录表单、OAuth 弹窗、凭据存储或托管同步服务。它们公开同步基础设施。您的应用程序拥有身份验证体验。
+
+### 只读和写回
+
+提供程序包支持：
+
+- **只读模式** (`writable: false`) — 将事件从服务器同步到 DayFlow 而不写回。
+- **写回模式** (`writable: true`, 默认) — 将本地创建、更新和删除写回服务器。
+
+## 完整的 CalDAV 示例
+
+此示例展示了生产级 CalDAV 集成的完整形态：
+
+1. 后端代理存储凭据并转发 CalDAV 方法。
+2. 前端创建一个代理的 fetch 函数。
+3. CalDAV 适配器发现或接收用户的日历主页 URL。
+4. DayFlow 从本地缓存中设定种子，然后在后台同步。
+5. 本地编辑仅在远程日历可写时写回。
+
+### 1. 安装
+
+<PackageTabs pkg='@dayflow/caldav' />
+
+### 2. 配置后端
+
+在提供程序支持的情况下，使用特定于提供程序的应用密码。不要将这些值发送到浏览器。
+
+```bash
+# iCloud
+CALDAV_BASE_URL=https://caldav.icloud.com/
+CALDAV_USERNAME=alice@icloud.com
+CALDAV_PASSWORD=xxxx-xxxx-xxxx-xxxx
+
+# Nextcloud
+# CALDAV_BASE_URL=https://nextcloud.example.com/remote.php/dav/
+# CALDAV_USERNAME=alice
+# CALDAV_PASSWORD=nextcloud-app-password
+
+# Radicale
+# CALDAV_BASE_URL=https://radicale.example.com/
+
+# Fastmail
+# CALDAV_BASE_URL=https://caldav.fastmail.com/dav/
+```
+
+提供程序说明：
+
+| 提供程序      | 推荐设置                                                                                                    |
+| :------------ | :---------------------------------------------------------------------------------------------------------- |
+| **iCloud**    | 使用 Apple 应用特定密码并使用 `createCalDAVAdapterFromServer(ICLOUD_CALDAV_SERVER, ...)` 进行动态主页发现。 |
+| **Nextcloud** | 如果您已经知道用户名，请使用 `nextcloudConfig(host, username)`；使用个人设置中的应用密码。                  |
+| **Radicale**  | 一些服务器省略权限。DayFlow 将模糊的日历视为只读，除非适配器结果另有说明。                                  |
+| **Fastmail**  | 将 `fastmailConfig('https://caldav.fastmail.com/dav', email)` 与后端代理一起使用。                          |
+
+### 3. 添加代理路由
+
+此 Next.js App Router 路由接受来自浏览器的 JSON 包装的 CalDAV 请求，注入 Basic Auth，将上游 URL 限制为您配置的 CalDAV 基础 URL，并返回上游 XML/ICS 响应。
+
+```ts title="app/api/caldav/route.ts"
+export const runtime = 'nodejs';
+
+const ALLOWED_METHODS = new Set(['PROPFIND', 'REPORT', 'PUT', 'DELETE']);
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+}
+
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin':
+      process.env.APP_ORIGIN ?? 'http://localhost:3000',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Expose-Headers': 'ETag, DAV',
+  };
+}
+
+export function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders() });
+}
+
+export async function POST(request: Request) {
+  const baseUrl = requireEnv('CALDAV_BASE_URL');
+  const username = requireEnv('CALDAV_USERNAME');
+  const password = requireEnv('CALDAV_PASSWORD');
+  const { url, init = {} } = (await request.json()) as {
+    url: string;
+    init?: RequestInit;
+  };
+
+  const target = new URL(url);
+  const base = new URL(baseUrl);
+  const method = init.method ?? 'PROPFIND';
+
+  if (!target.href.startsWith(base.href)) {
+    return new Response('Forbidden upstream URL', {
+      status: 403,
+      headers: corsHeaders(),
+    });
+  }
+  if (!ALLOWED_METHODS.has(method)) {
+    return new Response('Method not allowed', {
+      status: 405,
+      headers: corsHeaders(),
+    });
+  }
+
+  const headers = new Headers(init.headers);
+  headers.set(
+    'Authorization',
+    `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+  );
+
+  const upstream = await fetch(target.href, {
+    method,
+    headers,
+    body: typeof init.body === 'string' ? init.body : undefined,
+  });
+
+  const responseHeaders = new Headers(corsHeaders());
+  for (const name of ['Content-Type', 'ETag', 'DAV', 'Last-Modified']) {
+    const value = upstream.headers.get(name);
+    if (value) responseHeaders.set(name, value);
+  }
+
+  return new Response(await upstream.text(), {
+    status: upstream.status,
+    headers: responseHeaders,
+  });
+}
+```
+
+对于多用户产品，请从已登录用户的加密帐户记录中加载凭据，而不是从流程级环境变量中加载。重要的规则是相同的：DayFlow 将 CalDAV 协议请求发送到您的后端，您的后端添加凭据。
+
+### 4. 创建持久同步存储
+
+`createCalDAVSync` 可以使用内存存储运行，但生产应用应持久化同步令牌、ETags 和事件远程引用。如果没有持久存储，每次重新加载都会丢失增量同步状态和条件写元数据。
+
+```ts title="caldav-storage.ts"
+import type { CalDAVStorage } from '@dayflow/caldav';
+
+const key = (accountId: string, name: string, id: string) =>
+  `dayflow:caldav:${accountId}:${name}:${id}`;
+
+export function createLocalCalDAVStorage(accountId: string): CalDAVStorage {
+  return {
+    getSyncToken: async calendarId =>
+      localStorage.getItem(key(accountId, 'sync-token', calendarId)),
+    setSyncToken: async (calendarId, token) => {
+      const storageKey = key(accountId, 'sync-token', calendarId);
+      if (token) localStorage.setItem(storageKey, token);
+      else localStorage.removeItem(storageKey);
+    },
+    getCtag: async calendarId =>
+      localStorage.getItem(key(accountId, 'ctag', calendarId)),
+    setCtag: async (calendarId, ctag) => {
+      localStorage.setItem(key(accountId, 'ctag', calendarId), ctag);
+    },
+    getEtag: async href => localStorage.getItem(key(accountId, 'etag', href)),
+    setEtag: async (href, etag) => {
+      localStorage.setItem(key(accountId, 'etag', href), etag);
+    },
+    deleteEtag: async href => {
+      localStorage.removeItem(key(accountId, 'etag', href));
+    },
+    getEventState: async eventId =>
+      JSON.parse(
+        localStorage.getItem(key(accountId, 'event-state', eventId)) ?? 'null'
+      ),
+    setEventState: async (eventId, state) => {
+      localStorage.setItem(
+        key(accountId, 'event-state', eventId),
+        JSON.stringify(state)
+      );
+    },
+    deleteEventState: async eventId => {
+      localStorage.removeItem(key(accountId, 'event-state', eventId));
+    },
+    clearCalendar: async calendarId => {
+      const prefix = `dayflow:caldav:${accountId}:`;
+      for (const storageKey of Object.keys(localStorage)) {
+        if (!storageKey.startsWith(prefix)) continue;
+
+        const value = localStorage.getItem(storageKey);
+        const isCalendarKey =
+          storageKey === key(accountId, 'sync-token', calendarId) ||
+          storageKey === key(accountId, 'ctag', calendarId) ||
+          storageKey.startsWith(key(accountId, 'etag', calendarId));
+        let isEventStateForCalendar = false;
+        if (storageKey.startsWith(`${prefix}event-state:`) && value) {
+          try {
+            isEventStateForCalendar =
+              JSON.parse(value).calendarId === calendarId;
+          } catch {
+            isEventStateForCalendar = false;
+          }
+        }
+
+        if (isCalendarKey || isEventStateForCalendar) {
+          localStorage.removeItem(storageKey);
+        }
+      }
+    },
+  };
+}
+```
+
+如果您需要跨设备同步缓存、加密、大量事件历史记录或帐户级清理，请使用 IndexedDB 或您自己的后端数据库。
+
+### 5. 将 CalDAV 附加到 DayFlow
+
+此 React 示例使用 iCloud 风格的发现。当您已经知道提供程序的日历主页 URL 时，请将适配器创建块替换为 `nextcloudConfig`、`radicaleConfig` 或 `fastmailConfig`。
+
+```tsx title="CalDAVCalendar.tsx"
+import { useEffect, useRef } from 'react';
+import {
+  DayFlowCalendar,
+  createMonthView,
+  useCalendarApp,
+} from '@dayflow/react';
+import {
+  ICLOUD_CALDAV_SERVER,
+  attachCalDAVToDayFlow,
+  createCalDAVAdapter,
+  createCalDAVAdapterFromServer,
+  createCalDAVSync,
+  createNamespacedCalDAVEventId,
+  nextcloudConfig,
+  type CalDAVDayFlowController,
+  type CalDAVSyncStatus,
+} from '@dayflow/caldav';
+import { createLocalCalDAVStorage } from './caldav-storage';
+
+type Provider = 'icloud' | 'nextcloud';
+
+type Props = {
+  accountId: string;
+  provider: Provider;
+  nextcloudHost?: string;
+  nextcloudUsername?: string;
+  onStatusChange?: (status: CalDAVSyncStatus) => void;
+};
+
+export function CalDAVCalendar({
+  accountId,
+  provider,
+  nextcloudHost,
+  nextcloudUsername,
+  onStatusChange,
+}: Props) {
+  const calendar = useCalendarApp({
+    views: [createMonthView()],
+    calendars: [],
+    events: [],
+  });
+  const controllerRef = useRef<CalDAVDayFlowController | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const proxiedFetch = (url: string, init?: RequestInit) =>
+      fetch('/api/caldav', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, init }),
+      });
+
+    async function startSync() {
+      const adapter =
+        provider === 'icloud'
+          ? await createCalDAVAdapterFromServer(ICLOUD_CALDAV_SERVER, {
+              fetch: proxiedFetch,
+            })
+          : createCalDAVAdapter({
+              ...nextcloudConfig(nextcloudHost!, nextcloudUsername!),
+              fetch: proxiedFetch,
+            });
+
+      if (disposed) return;
+
+      const sync = createCalDAVSync({
+        adapter,
+        storage: createLocalCalDAVStorage(accountId),
+      });
+
+      const controller = attachCalDAVToDayFlow(calendar.app, sync, {
+        writable: true,
+        refreshOnVisibleRangeChange: true,
+        createEventId: createNamespacedCalDAVEventId,
+        eventMode: {
+          recurring: 'read-only',
+        },
+        getInitialSnapshot: async () => {
+          const cached = await loadCachedCalDAVSnapshot(accountId);
+          return cached ?? { calendars: [], events: [] };
+        },
+        onSyncComplete: async delta => {
+          await persistSyncedDayFlowState(accountId, calendar.app);
+          console.info('CalDAV sync complete', delta);
+        },
+        onWriteComplete: async () => {
+          await persistSyncedDayFlowState(accountId, calendar.app);
+        },
+        onError: (error, context) => {
+          console.error('CalDAV sync failed', context, error);
+          onStatusChange?.(controller.getStatus());
+        },
+      });
+
+      controllerRef.current = controller;
+      await controller.start();
+      onStatusChange?.(controller.getStatus());
+    }
+
+    startSync().catch(error => {
+      console.error('Failed to start CalDAV sync', error);
+    });
+
+    return () => {
+      disposed = true;
+      controllerRef.current?.stop();
+      controllerRef.current = null;
+    };
+  }, [
+    accountId,
+    calendar.app,
+    nextcloudHost,
+    nextcloudUsername,
+    onStatusChange,
+    provider,
+  ]);
+
+  return <DayFlowCalendar calendar={calendar} />;
+}
+```
+
+该示例引用了两个应用拥有的持久化助手：
+
+```ts
+import type { ICalendarApp } from '@dayflow/core';
+
+async function loadCachedCalDAVSnapshot(accountId: string) {
+  // 从 IndexedDB、Supabase、后端等返回 { calendars, events }。
+  // 没有缓存时返回 null。
+  return null;
+}
+
+async function persistSyncedDayFlowState(accountId: string, app: ICalendarApp) {
+  // 将 app.getCalendars() 和 app.getAllEvents() 持久化到您的本地存储中。
+  // 请将其与仅存储同步元数据的 CalDAVStorage 分开。
+}
+```
+
+### 6. 验证写回行为
+
+在为真实用户启用写回之前，针对目标提供程序测试这些流程：
+
+| 流程         | 预期结果                                                                   |
+| :----------- | :------------------------------------------------------------------------- |
+| 初始加载     | 远程日历出现，然后加载可见范围内的事件。                                   |
+| 导航到下个月 | `refreshOnVisibleRangeChange` 获取该范围。                                 |
+| 创建本地事件 | 在远程创建一个 `.ics` 资源，并且本地事件接收 CalDAV `href`/`etag` 元数据。 |
+| 编辑本地事件 | 更新使用最新的 ETag，并在服务器响应后刷新本地 CalDAV 元数据。              |
+| 删除本地事件 | 当日历可写时，删除远程资源。                                               |
+| 编辑重复事件 | DayFlow 绑定将重复事件视为只读。                                           |
+| 编辑只读日历 | 当远程日历缺少创建/更新/删除权限时，不会尝试写入。                         |
+
+### 生产清单
+
+| 领域         | 检查事项                                                                                                            |
+| :----------- | :------------------------------------------------------------------------------------------------------------------ |
+| 凭据         | 仅在服务器端存储提供程序凭据；如果可用，请使用应用密码；断开连接时轮换或撤销。                                      |
+| 代理允许列表 | 将上游 URL 限制为用户配置的提供程序基础 URL；仅允许 `PROPFIND`, `REPORT`, `PUT` 和 `DELETE`。                       |
+| 耐久同步存储 | 为每个帐户持久化 `CalDAVStorage`，以便同步令牌、ETags 和远程 href 在重新加载后存活。                                |
+| 本地缓存     | 使用 `getInitialSnapshot` 实现快速首次绘制，但将凭据和同步元数据排除在事件缓存之外。                                |
+| 事件标识     | 除非您有迁移计划，否则请保留 `createNamespacedCalDAVEventId`；它可防止与本地事件和其他提供程序发生冲突。            |
+| 部分快照     | 除非您知道响应是权威的完整快照，否则不要从范围受限的提供程序响应中删除本地记录。                                    |
+| 提供程序怪癖 | iCloud 需要发现；Nextcloud 应使用应用密码；Radicale 可能显示为只读；Fastmail 使用 `/dav/principals/user/...` 路径。 |
+
+## 不支持的功能
+
+| 限制             | 详细信息                                                                   |
+| :--------------- | :------------------------------------------------------------------------- |
+| **重复事件编辑** | 重复事件是只读的。编辑、拖动或删除重复实例是被阻止的。                     |
+| **内置 OAuth**   | OAuth 流程、令牌刷新和凭据存储是您的责任。                                 |
+| **离线支持**     | 提供程序包需要实时网络连接。                                               |
+| **冲突 UI**      | ETag 冲突 (412) 会自动重试；不包括手动冲突解决 UI。                        |
+| **CalDAV CORS**  | CalDAV 服务器不支持浏览器 CORS — 需要后端代理。                            |
+| **Google CORS**  | Google Calendar API 支持 CORS，但从浏览器发送令牌是安全风险 — 请使用代理。 |

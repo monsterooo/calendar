@@ -1,0 +1,263 @@
+# @dayflow/caldav
+
+`@dayflow/caldav` 是一个无头 (headless) 且以适配器为核心的 CalDAV 同步引擎。它适用于 iCloud Calendar、Nextcloud、Radicale、Fastmail 以及任何符合 RFC 4791 标准的 CalDAV 服务器。
+
+## 安装
+
+<PackageTabs pkg='@dayflow/caldav' />
+
+## 快速开始
+
+```tsx
+import { useRef, useEffect } from 'react';
+import {
+  DayFlowCalendar,
+  useCalendarApp,
+  createMonthView,
+} from '@dayflow/react';
+import {
+  attachCalDAVToDayFlow,
+  createCalDAVAdapter,
+  createCalDAVSync,
+  type CalDAVDayFlowController,
+} from '@dayflow/caldav';
+
+function MyCalendar() {
+  const calendar = useCalendarApp({
+    views: [createMonthView()],
+    calendars: [],
+    events: [],
+  });
+  const controllerRef = useRef<CalDAVDayFlowController | null>(null);
+
+  useEffect(() => {
+    if (controllerRef.current) return;
+
+    const adapter = createCalDAVAdapter({
+      calendarHomeUrl: 'https://caldav.example.com/calendars/alice/',
+      fetch: (url, init) =>
+        fetch('/api/caldav-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, init }),
+        }),
+    });
+
+    const sync = createCalDAVSync({ adapter });
+    const controller = attachCalDAVToDayFlow(calendar.app, sync, {
+      writable: true,
+      maxConcurrentCalendars: 4,
+      onSyncComplete: delta => {
+        console.log(
+          `同步完成: +${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+        );
+      },
+    });
+
+    controllerRef.current = controller;
+    controller.start();
+
+    return () => {
+      controller.stop();
+      controllerRef.current = null;
+    };
+  }, [calendar.app]);
+
+  return <DayFlowCalendar calendar={calendar} />;
+}
+```
+
+## 日历主页发现
+
+对于需要动态发现的服务器（如 iCloud），请使用 `createCalDAVAdapterFromServer` —— 它执行两步 PROPFIND 并在一次调用中返回准备好的适配器：
+
+```ts
+import {
+  createCalDAVAdapterFromServer,
+  ICLOUD_CALDAV_SERVER,
+} from '@dayflow/caldav';
+
+const adapter = await createCalDAVAdapterFromServer(ICLOUD_CALDAV_SERVER, {
+  fetch: proxiedFetch,
+});
+```
+
+如果您需要单独获取主页 URL（用于缓存或日志记录），请使用低级别的 `discoverCalendarHome`：
+
+```ts
+import {
+  discoverCalendarHome,
+  createCalDAVAdapter,
+  ICLOUD_CALDAV_SERVER,
+} from '@dayflow/caldav';
+
+const calendarHomeUrl = await discoverCalendarHome(
+  ICLOUD_CALDAV_SERVER,
+  authenticatedFetch
+);
+const adapter = createCalDAVAdapter({
+  calendarHomeUrl,
+  fetch: authenticatedFetch,
+});
+```
+
+`discoverCalendarHome` 执行两步 PROPFIND：
+
+1. 从服务器根目录获取 `current-user-principal`
+2. 从主体 URL 获取 `calendar-home-set`
+
+`fetch` 参数必须注入身份验证凭据 —— 发现请求需要像任何其他 CalDAV 请求一样进行身份验证。
+
+## 提供程序预设
+
+使用内置预设来构建已知提供程序的正确 `calendarHomeUrl`：
+
+```ts
+import {
+  ICLOUD_CALDAV_SERVER,
+  createCalDAVAdapterFromServer,
+  nextcloudConfig,
+  radicaleConfig,
+  fastmailConfig,
+  createCalDAVAdapter,
+} from '@dayflow/caldav';
+
+// iCloud — 必须始终动态发现
+const icloudAdapter = await createCalDAVAdapterFromServer(
+  ICLOUD_CALDAV_SERVER,
+  { fetch: proxiedFetch }
+);
+
+// Nextcloud
+const nextcloudAdapter = createCalDAVAdapter({
+  ...nextcloudConfig('https://nextcloud.example.com', 'alice'),
+  fetch: proxiedFetch,
+});
+
+// Radicale
+const radicaleAdapter = createCalDAVAdapter({
+  ...radicaleConfig('https://radicale.example.com', 'alice'),
+  fetch: proxiedFetch,
+});
+
+// Fastmail
+const fastmailAdapter = createCalDAVAdapter({
+  ...fastmailConfig('https://caldav.fastmail.com/dav', 'alice@fastmail.com'),
+  fetch: proxiedFetch,
+});
+```
+
+### iCloud 日历
+
+iCloud CalDAV 需要**应用特定密码**，而不是您的 Apple ID 密码。请在 [appleid.apple.com](https://appleid.apple.com) → 登录和安全 → 应用特定密码处生成一个。
+
+iCloud 不支持浏览器 CORS，因此所有请求（包括发现）都需要后端代理。
+
+适配器自动处理的 iCloud 特定行为：
+
+- 8 位 RGBA 16 进制颜色 (`#RRGGBBAA`) —— alpha 通道被剥离
+- 条件写 (`If-Match` ETag) 工作正常
+- 全天事件使用标准的 `VALUE=DATE` 格式
+- 时区感知事件使用标准的 `TZID` 参数
+
+### Nextcloud
+
+使用“个人设置”→“安全”中的[应用密码](https://docs.nextcloud.com/server/latest/user_manual/en/session_management.html)，而不是您的帐户密码。
+
+Nextcloud 正确返回 `current-user-privilege-set`，因此读/写权限是自动检测的。不支持 CORS —— 请使用代理。
+
+### Radicale
+
+Radicale 通常不返回 `current-user-privilege-set`，因此适配器默认将发现的日历设为只读。如果您知道用户拥有写权限，请在发现后在 `CalendarType` 上设置 `readOnly: false`。
+
+### Fastmail
+
+Fastmail 支持标准 CalDAV。使用您的 Fastmail 电子邮件地址作为用户名使用 `fastmailConfig`。
+
+## 本地缓存加载
+
+如果您将同步的事件持久化在数据库或本地存储（如 Supabase、IndexedDB）中，您可以在第一次远程同步之前为 DayFlow 设定种子，以便日历立即呈现：
+
+```ts
+const controller = attachCalDAVToDayFlow(calendar.app, sync, {
+  getInitialSnapshot: async () => {
+    const { calendars, events } = await loadFromLocalDB();
+    return { calendars, events };
+  },
+  onSyncComplete: delta => {
+    // 保存更改到您的本地存储
+    console.log(
+      `+${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+    );
+  },
+  onWriteComplete: (operation, event) => {
+    // 成功写回后更新本地存储
+    persistEvent(operation, event);
+  },
+});
+```
+
+`getInitialSnapshot` 在 `start()` 期间调用一次，在进行任何 CalDAV 请求之前。DayFlow 在后台同步运行时使用缓存数据呈现。来自 `getInitialSnapshot` 的错误将传递给 `onError`，不会中止远程同步。
+
+## 手动应用远程快照
+
+对于管理自己同步编排的应用（例如通过后端作业而不是直接从浏览器同步），`applyRemoteSnapshot` 在不触发写回的情况下将一批远程事件应用到 DayFlow：
+
+```ts
+import { applyRemoteSnapshot, getCalDAVMeta } from '@dayflow/caldav';
+
+const delta = await applyRemoteSnapshot(
+  calendar.app,
+  { calendars, events },
+  {
+    // 标识此提供程序拥有的事件，以便清理陈旧事件
+    isOwnedEvent: event => Boolean(getCalDAVMeta(event)),
+    isOwnedCalendar: calendar => calendar.source === 'iCloud',
+    snapshotMode: 'authoritative',
+
+    // 在乐观同步期间保留正在进行的本地编辑（可选）
+    resolveConflict: (remote, local) =>
+      mergeLocalEditsOntoRemote(remote, local),
+  }
+);
+
+console.log(delta.events.added, delta.events.updated, delta.events.deleted);
+```
+
+`applyRemoteSnapshot` 计算传入快照与当前应用状态之间的差异，然后使用 `source: 'remote'` 应用更改以防止写回循环。它返回包含每个操作计数的 `RemoteSnapshotDelta`。
+
+快照默认被视为局部的，因此未出现在快照中的拥有的本地记录将被保留。仅当快照完全代表所有提供程序拥有的日历和事件时，才传递 `snapshotMode: 'authoritative'`。对于可见范围、过滤或分页响应，请保持默认的局部模式或明确设置 `deleteMissingEvents: false` 和 `deleteMissingCalendars: false`。
+
+## 后端代理
+
+CalDAV 服务器不支持浏览器 CORS。浏览器不能直接调用它们。您需要一个后端代理，该代理：
+
+1. 接收来自 DayFlow 的请求（作为 JSON 包装的 CalDAV 请求）
+2. 注入凭据（Basic Auth、令牌等）
+3. 转发给 CalDAV 服务器并返回响应
+
+（中略：代理示例与英文文档相同）
+
+## 选项参考
+
+### `attachCalDAVToDayFlow` 选项
+
+| 选项                          | 类型                                   | 默认值        | 描述                                                                        |
+| :---------------------------- | :------------------------------------- | :------------ | :-------------------------------------------------------------------------- |
+| `writable`                    | `boolean`                              | `true`        | 允许将本地更改写回 CalDAV 服务器。                                          |
+| `refreshOnVisibleRangeChange` | `boolean`                              | `true`        | 当用户导航到新日期范围时重新同步。                                          |
+| `maxConcurrentCalendars`      | `number`                               | `4`           | 并行同步的远程日历的最大数量。                                              |
+| `eventMode.recurring`         | `'read-only'`                          | `'read-only'` | 重复事件是只读的。仅支持 `'read-only'`。                                    |
+| `onError`                     | `(error, context) => void`             | —             | 在任何同步或写入失败时调用。                                                |
+| `getInitialSnapshot`          | `() => Promise<{ events, calendars }>` | —             | 在第一次远程同步之前从本地缓存中为 DayFlow 设定种子。错误传递给 `onError`。 |
+| `onSyncComplete`              | `(delta: CalDAVSyncDelta) => void`     | —             | 在每次成功同步后调用，包含更改计数。                                        |
+| `onWriteComplete`             | `(operation, event) => void`           | —             | 在本地变更成功写回 CalDAV 服务器后调用。                                    |
+| `createEventId`               | `(input) => string`                    | namespaced    | 构建远程 CalDAV 事件的 DayFlow ID。默认为提供程序范围的 ID 以避免冲突。     |
+
+## 控制器 API
+
+（中略：控制器 API 与英文文档相同）
+
+## 存储接口
+
+（中略：存储接口描述与英文文档相同）

@@ -22,6 +22,14 @@ export type CalDAVEventMapperOptions = {
    * collisions with local events or other providers.
    */
   createEventId?: (input: CalDAVEventIdInput) => string;
+
+  /**
+   * Include VEVENTs with STATUS:CANCELLED.
+   *
+   * Defaults to false because cancelled CalDAV resources usually represent
+   * removed meetings and should not render as active DayFlow events.
+   */
+  includeCancelled?: boolean;
 };
 
 export function createNamespacedCalDAVEventId({
@@ -72,6 +80,7 @@ export function mapCalDAVEventToDayFlow(
   const vevent = vevents[0];
 
   if (!vevent.uid || !vevent.dtstart) return null;
+  if (vevent.status === 'CANCELLED' && !options.includeCancelled) return null;
 
   let start:
     | Temporal.PlainDate
@@ -126,6 +135,23 @@ export function mapCalDAVEventToDayFlow(
   if (vevent.location) {
     eventMeta.location = vevent.location;
   }
+  const icalMeta = {
+    ...(vevent.status ? { status: vevent.status } : {}),
+    ...(vevent.transp ? { transp: vevent.transp } : {}),
+    ...(vevent.url ? { url: vevent.url } : {}),
+    ...(vevent.categories?.length ? { categories: vevent.categories } : {}),
+    ...(vevent.organizer ? { organizer: vevent.organizer } : {}),
+    ...(vevent.attendees?.length ? { attendees: vevent.attendees } : {}),
+    ...(vevent.recurrenceId ? { recurrenceId: vevent.recurrenceId } : {}),
+    ...(vevent.exdate?.length ? { exdate: vevent.exdate } : {}),
+    ...(vevent.rdate?.length ? { rdate: vevent.rdate } : {}),
+    ...(vevent.sequence === undefined ? {} : { sequence: vevent.sequence }),
+    ...(vevent.created ? { created: vevent.created } : {}),
+    ...(vevent.lastModified ? { lastModified: vevent.lastModified } : {}),
+  };
+  if (Object.keys(icalMeta).length > 0) {
+    eventMeta.ical = icalMeta;
+  }
 
   const event: Event = {
     id:
@@ -138,6 +164,7 @@ export function mapCalDAVEventToDayFlow(
     title: vevent.summary ?? '(No Title)',
     start,
     end,
+    allDay: isPlainDate(start),
     calendarId: data.calendarId,
     meta: eventMeta,
   };

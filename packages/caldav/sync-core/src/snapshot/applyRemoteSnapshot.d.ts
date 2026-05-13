@@ -21,17 +21,28 @@ export type RemoteSnapshotOptions = {
    */
   resolveConflict?: (remote: Event, local: Event) => Event;
   /**
+   * Describe whether the snapshot fully represents the provider-owned records.
+   *
+   * - `partial` is safe for visible-range, filtered, or paginated provider
+   *   responses and does not delete missing local records by default.
+   * - `authoritative` means any owned local record missing from the snapshot
+   *   should be removed.
+   *
+   * Defaults to `partial`.
+   */
+  snapshotMode?: 'partial' | 'authoritative';
+  /**
    * Delete owned local calendars that are missing from the snapshot.
    *
-   * Defaults to true for backward compatibility. Set false when the snapshot is
-   * partial, such as a filtered or range-scoped provider response.
+   * Defaults to `snapshotMode === 'authoritative'`. Override only when your
+   * application has a provider-specific cleanup policy.
    */
   deleteMissingCalendars?: boolean;
   /**
    * Delete owned local events that are missing from the snapshot.
    *
-   * Defaults to true for backward compatibility. Set false when the snapshot is
-   * partial, such as a visible-range sync.
+   * Defaults to `snapshotMode === 'authoritative'`. Override only when your
+   * application has a provider-specific cleanup policy.
    */
   deleteMissingEvents?: boolean;
 };

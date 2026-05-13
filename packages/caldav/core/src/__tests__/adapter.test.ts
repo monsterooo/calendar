@@ -149,7 +149,7 @@ function makeMockFetch(responses: MockResponse[]) {
 // ─── PROPFIND (listCalendars) ─────────────────────────────────────────────────
 
 const PROPFIND_RESPONSE = `<?xml version="1.0" encoding="utf-8"?>
-<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:IC="http://apple.com/ns/ical/">
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:IC="http://apple.com/ns/ical/" xmlns:CS="http://calendarserver.org/ns/">
   <D:response>
     <D:href>/caldav/user/</D:href>
     <D:propstat>
@@ -169,6 +169,7 @@ const PROPFIND_RESPONSE = `<?xml version="1.0" encoding="utf-8"?>
         <C:supported-calendar-component-set>
           <C:comp name="VEVENT"/>
         </C:supported-calendar-component-set>
+        <CS:getctag>ctag-personal-1</CS:getctag>
         <IC:calendar-color>#3b82f6FF</IC:calendar-color>
         <D:current-user-privilege-set>
           <D:privilege><D:read/></D:privilege>
@@ -243,6 +244,12 @@ describe('listCalendars (PROPFIND)', () => {
     const { adapter } = makeAdapter();
     const [personal] = await adapter.listCalendars();
     expect(personal.color).toBe('#3b82f6');
+  });
+
+  it('parses calendar ctag when provided', async () => {
+    const { adapter } = makeAdapter();
+    const [personal] = await adapter.listCalendars();
+    expect(personal.ctag).toBe('ctag-personal-1');
   });
 
   it('derives readOnly=false for calendar with write privileges', async () => {

@@ -52,6 +52,40 @@ function unescapeText(value: string): string {
     .replaceAll('\\\\', '\\');
 }
 
+function parseTextList(value: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let escaped = false;
+
+  for (const char of value) {
+    if (escaped) {
+      current += `\\${char}`;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === ',') {
+      parts.push(unescapeText(current));
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaped) current += '\\';
+  parts.push(unescapeText(current));
+
+  return parts.map(part => part.trim()).filter(Boolean);
+}
+
+function parseInteger(value: string): number | undefined {
+  if (!/^-?\d+$/.test(value.trim())) return undefined;
+  return Number.parseInt(value.trim(), 10);
+}
+
 // ─── VEVENT block parsing ────────────────────────────────────────────────────
 
 function parseVEventBlock(lines: string[]): ParsedVEvent {
@@ -76,17 +110,73 @@ function parseVEventBlock(lines: string[]): ParsedVEvent {
       case 'LOCATION':
         vevent.location = unescapeText(value);
         break;
+      case 'STATUS':
+        vevent.status = value.trim().toUpperCase();
+        break;
+      case 'TRANSP':
+        vevent.transp = value.trim().toUpperCase();
+        break;
+      case 'URL':
+        vevent.url = value.trim();
+        break;
+      case 'CATEGORIES':
+        vevent.categories = [
+          ...(vevent.categories ?? []),
+          ...parseTextList(value),
+        ];
+        break;
+      case 'ORGANIZER':
+        vevent.organizer = { value: value.trim(), params };
+        break;
+      case 'ATTENDEE':
+        vevent.attendees = [
+          ...(vevent.attendees ?? []),
+          { value: value.trim(), params },
+        ];
+        break;
       case 'DTSTART':
         vevent.dtstart = { value: value.trim(), params };
         break;
       case 'DTEND':
         vevent.dtend = { value: value.trim(), params };
         break;
+      case 'RECURRENCE-ID':
+        vevent.recurrenceId = { value: value.trim(), params };
+        break;
       case 'DURATION':
         vevent.duration = value.trim();
         break;
       case 'RRULE':
         vevent.rrule = value.trim();
+        break;
+      case 'EXDATE':
+        vevent.exdate = [
+          ...(vevent.exdate ?? []),
+          ...value
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean)
+            .map(item => ({ value: item, params })),
+        ];
+        break;
+      case 'RDATE':
+        vevent.rdate = [
+          ...(vevent.rdate ?? []),
+          ...value
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean)
+            .map(item => ({ value: item, params })),
+        ];
+        break;
+      case 'SEQUENCE':
+        vevent.sequence = parseInteger(value);
+        break;
+      case 'CREATED':
+        vevent.created = value.trim();
+        break;
+      case 'LAST-MODIFIED':
+        vevent.lastModified = value.trim();
         break;
       default:
         break;

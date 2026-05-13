@@ -13,5 +13,6 @@ export type {
   CalDAVErrorContext,
   CalDAVSync,
   CalDAVSyncDelta,
+  CalDAVSyncOptions,
   CalDAVSyncStatus,
 } from './types';

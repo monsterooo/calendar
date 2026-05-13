@@ -102,6 +102,47 @@ describe('parseICalendar', () => {
     expect(vevent.rrule).toBe('FREQ=WEEKLY;BYDAY=MO');
   });
 
+  it('parses common scheduling and recurrence exception fields', () => {
+    const ical = VCAL_WRAPPER(
+      [
+        'BEGIN:VEVENT',
+        'UID:rich-1@test',
+        'SUMMARY:Weekly Meeting',
+        'DTSTART;TZID=Australia/Sydney:20250101T100000',
+        'DTEND;TZID=Australia/Sydney:20250101T110000',
+        'RRULE:FREQ=WEEKLY;BYDAY=WE',
+        'EXDATE;TZID=Australia/Sydney:20250108T100000,20250115T100000',
+        'RDATE;TZID=Australia/Sydney:20250110T100000',
+        'RECURRENCE-ID;TZID=Australia/Sydney:20250122T100000',
+        'STATUS:CONFIRMED',
+        'TRANSP:OPAQUE',
+        'SEQUENCE:3',
+        'CATEGORIES:Work,Planning\\, Q1',
+        'ORGANIZER;CN=Alice:mailto:alice@example.com',
+        'ATTENDEE;CN=Bob;PARTSTAT=ACCEPTED:mailto:bob@example.com',
+        'URL:https://example.com/event',
+        'CREATED:20241201T000000Z',
+        'LAST-MODIFIED:20241202T000000Z',
+        'END:VEVENT',
+      ].join('\r\n')
+    );
+
+    const [vevent] = parseICalendar(ical);
+    expect(vevent.status).toBe('CONFIRMED');
+    expect(vevent.transp).toBe('OPAQUE');
+    expect(vevent.sequence).toBe(3);
+    expect(vevent.categories).toEqual(['Work', 'Planning, Q1']);
+    expect(vevent.exdate).toHaveLength(2);
+    expect(vevent.exdate?.[0].params.TZID).toBe('Australia/Sydney');
+    expect(vevent.rdate?.[0].value).toBe('20250110T100000');
+    expect(vevent.recurrenceId?.value).toBe('20250122T100000');
+    expect(vevent.organizer?.params.CN).toBe('Alice');
+    expect(vevent.attendees?.[0].params.PARTSTAT).toBe('ACCEPTED');
+    expect(vevent.url).toBe('https://example.com/event');
+    expect(vevent.created).toBe('20241201T000000Z');
+    expect(vevent.lastModified).toBe('20241202T000000Z');
+  });
+
   it('unescapes special characters in text properties', () => {
     const ical = VCAL_WRAPPER(
       [

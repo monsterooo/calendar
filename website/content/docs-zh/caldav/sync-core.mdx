@@ -1,0 +1,186 @@
+# @dayflow/sync-core
+
+`@dayflow/sync-core` 包含 DayFlow 同步集成使用的与提供程序无关的调整辅助工具。大多数应用程序不需要直接导入它。请先使用提供程序包：
+
+- 针对 CalDAV 服务器使用 [`@dayflow/caldav`](/docs/caldav/caldav)。
+- 针对 Google 日历使用 [`@dayflow/google-sync`](/docs/caldav/google-sync)。
+- 针对 Outlook 日历使用 [`@dayflow/outlook-sync`](/docs/caldav/outlook-sync)。
+
+当您构建自定义提供程序、通过后端作业进行同步或保持产品特定的日历/事件数据库与远程提供程序记录同步时，请使用 `@dayflow/sync-core`。
+
+## 安装
+
+<PackageTabs pkg='@dayflow/sync-core' />
+
+## 它拥有什么
+
+`@dayflow/sync-core` 拥有与提供程序无关的 diff/apply 层：
+
+| 辅助工具                       | 使用场景                                                         |
+| :----------------------------- | :--------------------------------------------------------------- |
+| `applyProviderEventsToDayFlow` | 提供程序绑定已经映射了 DayFlow 事件并删除了远程引用。            |
+| `applyRemoteSnapshot`          | 您有一个完整或部分提供程序快照，并希望将其应用到 `CalendarApp`。 |
+| `reconcileProviderCalendars`   | 您将远程日历同步到自己的数据库记录中。                           |
+| `reconcileProviderEvents`      | 您将远程事件同步到自己的数据库记录中，并需要标准化的更改记录。   |
+
+它不提供提供程序适配器、身份验证流程、令牌刷新、凭据存储、历史持久化、后台作业、重试队列或数据库架构。
+
+## 将提供程序事件应用到 DayFlow
+
+提供程序包在将远程事件映射到 DayFlow `Event` 对象后，使用 `applyProviderEventsToDayFlow`。它首先通过提供程序标识匹配现有事件，然后通过 DayFlow ID 匹配，并以 `source: 'remote'` 应用更改以避免写回循环。
+
+```ts
+import { applyProviderEventsToDayFlow } from '@dayflow/sync-core';
+
+const delta = applyProviderEventsToDayFlow({
+  app: calendar.app,
+  events: mappedRemoteEvents,
+  deleted: deletedRemoteRefs,
+  getProviderEventId: event => event.meta?.myProvider?.href,
+  getDeletedProviderEventId: deleted => deleted.href,
+  resolveUpdate: (remote, existing) => ({
+    ...remote,
+    meta: {
+      ...existing.meta,
+      ...remote.meta,
+    },
+  }),
+});
+
+console.log(delta.added, delta.updated, delta.deleted);
+```
+
+优先使用稳定的提供程序标识，例如 CalDAV `href`、Google 事件 ID 或 Graph 事件 ID。如果您的 DayFlow ID 策略稍后更改，这可以防止本地状态重复事件。
+
+## 应用远程快照
+
+`applyRemoteSnapshot` 将 DayFlow 日历和事件的快照协调到应用程序中。
+
+```ts
+import { applyRemoteSnapshot } from '@dayflow/sync-core';
+
+const delta = await applyRemoteSnapshot(
+  calendar.app,
+  {
+    calendars: remoteCalendars,
+    events: remoteEvents,
+  },
+  {
+    isOwnedCalendar: calendar => calendar.source === 'Custom Provider',
+    isOwnedEvent: event => event.meta?.provider === 'custom',
+    resolveConflict: (remote, local) => ({
+      ...remote,
+      meta: {
+        ...local.meta,
+        ...remote.meta,
+      },
+    }),
+    snapshotMode: 'authoritative',
+  }
+);
+```
+
+删除是关键所在。默认的 `snapshotMode` 是 `'partial'`，因此快照中丢失的拥有的本地记录将被保留。这对可见范围同步、过滤查询或分页的提供程序响应是安全的：
+
+```ts
+await applyRemoteSnapshot(calendar.app, partialSnapshot, {
+  isOwnedCalendar,
+  isOwnedEvent,
+  snapshotMode: 'partial',
+});
+```
+
+仅当快照完全代表所有提供程序拥有的日历和事件时，才使用 `snapshotMode: 'authoritative'`。较低级别的 `deleteMissingCalendars` 和 `deleteMissingEvents` 标志仍然存在于提供程序特定的清理策略中。
+
+## 协调数据库记录
+
+当您的应用程序在将提供程序记录应用到 DayFlow 之前将它们存储在数据库中时，使用 `reconcileProviderCalendars` 和 `reconcileProviderEvents`。
+
+```ts
+import {
+  reconcileProviderCalendars,
+  reconcileProviderEvents,
+} from '@dayflow/sync-core';
+
+const calendarResult = await reconcileProviderCalendars({
+  provider: 'custom',
+  remoteCalendars,
+  existingCalendars: await db.calendar.findMany({ where: { accountId } }),
+  getRemoteCalendarId: remote => remote.id,
+  getRecordId: record => record.id,
+  getRecordExternalCalendarId: record => record.externalCalendarId,
+  mapRemoteCalendar: (remote, existing) => ({
+    id: existing?.id ?? crypto.randomUUID(),
+    accountId,
+    provider: 'custom',
+    externalCalendarId: remote.id,
+    name: remote.name,
+    color: remote.color ?? null,
+    readOnly: remote.readOnly,
+    syncEnabled: existing?.syncEnabled ?? true,
+    syncToken: existing?.syncToken ?? null,
+    syncStatus: 'idle',
+  }),
+  save: records => db.calendar.upsertMany(records),
+  deactivate: records =>
+    db.calendar.updateMany(
+      records.map(record => ({ ...record, syncEnabled: false }))
+    ),
+});
+
+const eventResult = await reconcileProviderEvents({
+  provider: 'custom',
+  calendarId: localCalendar.id,
+  remoteEvents,
+  deletedRemoteEvents,
+  existingRecords: await db.event.findMany({
+    where: { calendarId: localCalendar.id },
+  }),
+  getRemoteEventId: remote => remote.id,
+  getDeletedRemoteEventId: deleted => deleted.id,
+  getRecordExternalEventId: record => record.externalEventId,
+  isRecordDeleted: record => Boolean(record.deletedAt),
+  mapRemoteEvent: (remote, existing) => ({
+    id: existing?.id ?? crypto.randomUUID(),
+    accountId,
+    calendarId: localCalendar.id,
+    provider: 'custom',
+    externalEventId: remote.id,
+    title: remote.title,
+    description: remote.description ?? null,
+    startsAt: remote.startsAt,
+    endsAt: remote.endsAt,
+    timezone: remote.timezone ?? null,
+    allDay: remote.allDay,
+    location: remote.location ?? null,
+    rawData: remote,
+    externalUpdatedAt: remote.updatedAt ?? null,
+    localUpdatedAt: existing?.localUpdatedAt ?? null,
+    syncStatus: 'synced',
+    deletedAt: null,
+  }),
+  save: records => db.event.upsertMany(records),
+  softDelete: record =>
+    db.event.update(record.id, { deletedAt: new Date().toISOString() }),
+});
+
+await db.syncHistory.insertMany([
+  ...calendarResult.changes,
+  ...eventResult.changes,
+]);
+```
+
+辅助工具返回标准化的更改对象，例如 `calendar.created`, `event.updated` 和 `event.deleted`。您的应用决定这些更改是变成审计日志、通知、分析还是其他内容。
+
+## 何时不要使用它
+
+不要仅仅为了连接标准远程日历而添加 `@dayflow/sync-core`。提供程序包已经在内部使用了正确的同步核心辅助工具，并包括特定于提供程序的映射、元数据、权限、写回行为和 DayFlow 附加控制器。
+
+仅在跨越以下边界时直接使用它：
+
+| 边界             | 为什么 sync-core 有帮助                                              |
+| :--------------- | :------------------------------------------------------------------- |
+| 自定义提供程序包 | 与官方提供程序共享相同的 DayFlow 应用行为。                          |
+| 后端主导同步     | 在渲染 DayFlow 之前将提供程序记录协调到您的数据库中。                |
+| 审计/历史管道    | 使用标准化的 `SyncChange` 对象，而不将历史记录绑定到提供程序适配器。 |
+| ID 策略迁移      | 在更改 DayFlow 本地 ID 的同时匹配稳定的提供程序标识。                |

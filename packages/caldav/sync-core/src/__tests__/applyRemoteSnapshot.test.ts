@@ -62,7 +62,7 @@ function createApp({
 }
 
 describe('applyRemoteSnapshot', () => {
-  it('deletes owned local records missing from an authoritative snapshot by default', async () => {
+  it('preserves owned local records missing from a partial snapshot by default', async () => {
     const { app, state, calls } = createApp({
       calendars: [{ id: 'cal-old', name: 'Old', source: 'Provider' }],
       events: [{ id: 'event-old', title: 'Old', source: 'Provider' }],
@@ -74,6 +74,30 @@ describe('applyRemoteSnapshot', () => {
       {
         isOwnedCalendar: calendar => calendar.source === 'Provider',
         isOwnedEvent: event => (event as TestEvent).source === 'Provider',
+      }
+    );
+
+    expect(delta.calendars.deleted).toBe(0);
+    expect(delta.events.deleted).toBe(0);
+    expect(calls.deletedCalendars).toEqual([]);
+    expect(calls.deletedEvents).toEqual([]);
+    expect(state.calendars).toHaveLength(1);
+    expect(state.events).toHaveLength(1);
+  });
+
+  it('deletes owned local records missing from an authoritative snapshot', async () => {
+    const { app, state, calls } = createApp({
+      calendars: [{ id: 'cal-old', name: 'Old', source: 'Provider' }],
+      events: [{ id: 'event-old', title: 'Old', source: 'Provider' }],
+    });
+
+    const delta = await applyRemoteSnapshot(
+      app as never,
+      { calendars: [], events: [] },
+      {
+        isOwnedCalendar: calendar => calendar.source === 'Provider',
+        isOwnedEvent: event => (event as TestEvent).source === 'Provider',
+        snapshotMode: 'authoritative',
       }
     );
 
@@ -85,7 +109,7 @@ describe('applyRemoteSnapshot', () => {
     expect(state.events).toHaveLength(0);
   });
 
-  it('can preserve missing records for partial snapshots', async () => {
+  it('allows explicit missing-record deletion overrides', async () => {
     const { app, state, calls } = createApp({
       calendars: [{ id: 'cal-old', name: 'Old', source: 'Provider' }],
       events: [{ id: 'event-old', title: 'Old', source: 'Provider' }],
@@ -97,16 +121,17 @@ describe('applyRemoteSnapshot', () => {
       {
         isOwnedCalendar: calendar => calendar.source === 'Provider',
         isOwnedEvent: event => (event as TestEvent).source === 'Provider',
-        deleteMissingCalendars: false,
-        deleteMissingEvents: false,
+        snapshotMode: 'partial',
+        deleteMissingCalendars: true,
+        deleteMissingEvents: true,
       }
     );
 
-    expect(delta.calendars.deleted).toBe(0);
-    expect(delta.events.deleted).toBe(0);
-    expect(calls.deletedCalendars).toEqual([]);
-    expect(calls.deletedEvents).toEqual([]);
-    expect(state.calendars).toHaveLength(1);
-    expect(state.events).toHaveLength(1);
+    expect(delta.calendars.deleted).toBe(1);
+    expect(delta.events.deleted).toBe(1);
+    expect(calls.deletedCalendars).toEqual(['cal-old']);
+    expect(calls.deletedEvents).toEqual(['event-old']);
+    expect(state.calendars).toHaveLength(0);
+    expect(state.events).toHaveLength(0);
   });
 });

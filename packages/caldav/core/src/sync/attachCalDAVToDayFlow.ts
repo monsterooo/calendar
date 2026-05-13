@@ -36,6 +36,27 @@ function resolveEvent(change: EventChange) {
   return change.type === 'update' ? change.after : change.event; // create or delete
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = Array.from({ length: items.length });
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex++;
+        results[currentIndex] = await mapper(items[currentIndex]);
+      }
+    })
+  );
+
+  return results;
+}
+
 export function attachCalDAVToDayFlow(
   app: ICalendarApp,
   sync: CalDAVSync,
@@ -50,6 +71,7 @@ export function attachCalDAVToDayFlow(
     onSyncComplete,
     onWriteComplete,
     createEventId = createNamespacedCalDAVEventId,
+    maxConcurrentCalendars = 4,
   } = options;
 
   let status: CalDAVSyncStatus = { state: 'idle' };
@@ -110,21 +132,29 @@ export function attachCalDAVToDayFlow(
       events: { added: 0, updated: 0, deleted: 0 },
     };
 
-    for (const calendarId of knownCalendarIds) {
-      const result = await sync.syncEvents({ calendarId, range });
+    const perCalendarDeltas = await mapWithConcurrency(
+      Array.from(knownCalendarIds),
+      maxConcurrentCalendars,
+      async calendarId => {
+        const result = await sync.syncEvents({ calendarId, range });
 
-      const events = result.events
-        .map(data => mapCalDAVEventToDayFlow(data, { createEventId }))
-        .filter((event): event is Event => event !== null);
+        const events = result.events
+          .map(data => mapCalDAVEventToDayFlow(data, { createEventId }))
+          .filter((event): event is Event => event !== null);
 
-      const eventDelta = applyProviderEventsToDayFlow<CalDAVDeletedEvent>({
-        app,
-        events,
-        deleted: result.deleted,
-        getProviderEventId: event => getCalDAVMeta(event)?.href,
-        getDeletedProviderEventId: deleted => deleted.href,
-      });
+        const eventDelta = applyProviderEventsToDayFlow<CalDAVDeletedEvent>({
+          app,
+          events,
+          deleted: result.deleted,
+          getProviderEventId: event => getCalDAVMeta(event)?.href,
+          getDeletedProviderEventId: deleted => deleted.href,
+        });
 
+        return eventDelta;
+      }
+    );
+
+    for (const eventDelta of perCalendarDeltas) {
       delta.events.added += eventDelta.added;
       delta.events.updated += eventDelta.updated;
       delta.events.deleted += eventDelta.deleted;

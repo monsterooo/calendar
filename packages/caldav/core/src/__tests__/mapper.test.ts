@@ -245,6 +245,58 @@ describe('mapCalDAVEventToDayFlow', () => {
     expect(event!.meta?.location).toBe('Conference Room A');
   });
 
+  it('stores supported iCalendar metadata in event.meta.ical', () => {
+    const data = makeEventData({
+      icalData: [
+        'BEGIN:VCALENDAR\r\nVERSION:2.0',
+        'BEGIN:VEVENT',
+        'UID:meta@example.com',
+        'SUMMARY:Event',
+        'DTSTART:20250115T100000Z',
+        'DTEND:20250115T110000Z',
+        'STATUS:CONFIRMED',
+        'TRANSP:TRANSPARENT',
+        'SEQUENCE:7',
+        'CATEGORIES:Work',
+        'URL:https://example.com/event',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ].join('\r\n'),
+      uid: 'meta@example.com',
+    });
+
+    const event = mapCalDAVEventToDayFlow(data);
+    expect(event!.meta?.ical).toMatchObject({
+      status: 'CONFIRMED',
+      transp: 'TRANSPARENT',
+      sequence: 7,
+      categories: ['Work'],
+      url: 'https://example.com/event',
+    });
+  });
+
+  it('omits cancelled events by default and can include them when requested', () => {
+    const data = makeEventData({
+      icalData: [
+        'BEGIN:VCALENDAR\r\nVERSION:2.0',
+        'BEGIN:VEVENT',
+        'UID:cancelled@example.com',
+        'SUMMARY:Cancelled Event',
+        'DTSTART:20250115T100000Z',
+        'DTEND:20250115T110000Z',
+        'STATUS:CANCELLED',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ].join('\r\n'),
+      uid: 'cancelled@example.com',
+    });
+
+    expect(mapCalDAVEventToDayFlow(data)).toBeNull();
+    expect(
+      mapCalDAVEventToDayFlow(data, { includeCancelled: true })!.meta?.ical
+    ).toMatchObject({ status: 'CANCELLED' });
+  });
+
   it('returns null for invalid iCal data', () => {
     const data = makeEventData({ icalData: 'not valid ical' });
     const event = mapCalDAVEventToDayFlow(data);

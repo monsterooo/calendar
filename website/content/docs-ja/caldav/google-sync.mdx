@@ -1,0 +1,219 @@
+# @dayflow/google-sync
+
+`@dayflow/google-sync` は、DayFlow を Google カレンダー REST API v3 に接続します。これは `@dayflow/caldav` とは別のパッケージであり、CalDAV ではなく Google カレンダー API を直接使用します。
+
+## インストール
+
+<PackageTabs pkg='@dayflow/google-sync' />
+
+## クイックスタート
+
+```tsx
+import { useRef, useEffect, useState } from 'react';
+import {
+  DayFlowCalendar,
+  useCalendarApp,
+  createMonthView,
+} from '@dayflow/react';
+import {
+  attachGoogleSyncToDayFlow,
+  createGoogleSync,
+  createGoogleSyncAdapter,
+  type GoogleDayFlowController,
+  type GoogleSyncStatus,
+} from '@dayflow/google-sync';
+
+function MyCalendar() {
+  const calendar = useCalendarApp({
+    views: [createMonthView()],
+    calendars: [],
+    events: [],
+  });
+
+  const controllerRef = useRef<GoogleDayFlowController | null>(null);
+  const [syncStatus, setSyncStatus] = useState<GoogleSyncStatus>({
+    state: 'idle',
+  });
+
+  useEffect(() => {
+    if (controllerRef.current) return;
+
+    const adapter = createGoogleSyncAdapter({
+      baseUrl: '/api/google-calendar',
+    });
+
+    const sync = createGoogleSync(adapter);
+    const controller = attachGoogleSyncToDayFlow(calendar.app, sync, {
+      writable: true,
+      onStatusChange: setSyncStatus,
+      onWriteError: (error, ctx) =>
+        console.error(`[google-sync] ${ctx.action} 失敗:`, error.message),
+      onSyncComplete: delta => {
+        console.log(
+          `同期完了: +${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+        );
+      },
+    });
+
+    controllerRef.current = controller;
+    controller.start();
+
+    return () => {
+      controller.stop();
+      controllerRef.current = null;
+    };
+  }, [calendar.app]);
+
+  return <DayFlowCalendar calendar={calendar} />;
+}
+```
+
+## トークンの注入
+
+### `getToken` の使用（クライアントサイドトークンに推奨）
+
+実行時にトークンが利用可能な場合（Supabase セッションや認証プロバイダーなど）、`getToken` を使用します。これはリクエストごとに呼び出されるため、トークンの更新は透過的であり、トークンが変更されてもアダプターを再作成する必要はありません。
+
+```ts
+const adapter = createGoogleSyncAdapter({
+  getToken: async () => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.provider_token ?? '';
+  },
+});
+```
+
+### バックエンドプロキシの使用（本番環境に推奨）
+
+Google カレンダー API は CORS をサポートしていますが、OAuth トークンをブラウザから送信すると、ネットワークリクエストを調査できる人すべてにトークンが露出します。本番環境では、トークンをサーバー上に保持してください。
+
+```ts
+const adapter = createGoogleSyncAdapter({
+  baseUrl: '/api/google-calendar',
+  // getToken は不要 — プロキシが Authorization を注入します
+});
+```
+
+（中略: プロキシの例は英語ドキュメントと同じです）
+
+## 同期トークンの永続化
+
+デフォルトでは、Google カレンダーの同期トークンはメモリ内に保存されるため、ページリロードで失われ、次のセッションでフル同期が発生します。`GoogleSyncStorage` を実装して永続化してください。
+
+```ts
+import { createGoogleSync, type GoogleSyncStorage } from '@dayflow/google-sync';
+
+const storage: GoogleSyncStorage = {
+  getSyncToken: async calendarId =>
+    localStorage.getItem(`google-token:${calendarId}`),
+  setSyncToken: async (calendarId, token) =>
+    token
+      ? localStorage.setItem(`google-token:${calendarId}`, token)
+      : localStorage.removeItem(`google-token:${calendarId}`),
+};
+
+const sync = createGoogleSync(adapter, { storage });
+```
+
+`storage` を連携させると、各セッションは最初からすべてのイベントを取得するのではなく、増分同期を開始します。
+
+## ローカルキャッシュのハイドレーション
+
+同期されたイベントをデータベースやローカルストアに永続化している場合は、最初のリモート同期の前に DayFlow をシードすることで、カレンダーを即座にレンダリングできます。
+
+```ts
+const controller = attachGoogleSyncToDayFlow(calendar.app, sync, {
+  getInitialSnapshot: async () => {
+    const { calendars, events } = await loadFromLocalDB();
+    return { calendars, events };
+  },
+  onSyncComplete: delta => {
+    // 変更内容を保存
+    saveChanges(delta);
+  },
+  onWriteComplete: (operation, event) => {
+    // 成功した書き戻し後にローカルストアを更新
+    persistEvent(operation, event);
+  },
+});
+```
+
+`getInitialSnapshot` は `start()` 中に一度だけ呼び出され、Google カレンダー API リクエストは行われません。バックグラウンド同期が実行されている間、DayFlow はキャッシュされたデータでレンダリングされます。
+
+## リモートスナップショットの手動適用
+
+独自の同期オーケストレーションを管理するアプリケーションの場合、`applyRemoteSnapshot` を使用して、書き戻しをトリガーせずにリモートイベントのバッチを DayFlow に適用できます。
+
+```ts
+import { applyRemoteSnapshot, getGoogleMeta } from '@dayflow/google-sync';
+
+const delta = await applyRemoteSnapshot(
+  calendar.app,
+  { calendars, events },
+  {
+    isOwnedEvent: event => Boolean(getGoogleMeta(event)),
+    isOwnedCalendar: calendar => calendar.source === 'Google',
+    snapshotMode: 'authoritative',
+
+    // オプティミスティック同期中に進行中のローカル編集を保持する（オプション）
+    resolveConflict: (remote, local) =>
+      mergeLocalEditsOntoRemote(remote, local),
+  }
+);
+
+console.log(delta.events.added, delta.events.updated, delta.events.deleted);
+```
+
+（中略: 説明の詳細は英語ドキュメントと同じです）
+
+## オプションリファレンス
+
+### `attachGoogleSyncToDayFlow` オプション
+
+| オプション           | 型                                     | デフォルト      | 説明                                                                                                    |
+| :------------------- | :------------------------------------- | :-------------- | :------------------------------------------------------------------------------------------------------ |
+| `writable`           | `boolean`                              | `true`          | ローカルの変更を Google カレンダーに書き戻すことを許可します。                                          |
+| `onStatusChange`     | `(status: GoogleSyncStatus) => void`   | —               | 同期状態が変更されるたびに呼び出されます。                                                              |
+| `onWriteError`       | `(error: Error, ctx) => void`          | `console.error` | 作成/更新/削除の書き戻しが失敗したときに呼び出されます。`ctx` には `action` と `eventId` が含まれます。 |
+| `getInitialSnapshot` | `() => Promise<{ events, calendars }>` | —               | 初回のリモート同期の前にローカルキャッシュから DayFlow をシードします。                                 |
+| `onSyncComplete`     | `(delta: GoogleSyncDelta) => void`     | —               | 各同期完了後に変更内容のカウントとともに呼び出されます。                                                |
+| `onWriteComplete`    | `(operation, event) => void`           | —               | ローカルでの変更が Google カレンダーへの書き戻しに成功した後に呼び出されます。                          |
+
+### `createGoogleSyncAdapter` オプション
+
+（中略: 表の項目は英語と同じ）
+
+## 同期の仕組み
+
+### カレンダーの検出
+
+`controller.start()` で認証済みユーザーのカレンダーリスト (`GET /calendarList`) をフェッチし、各カレンダーを DayFlow の `CalendarType` として登録します。`accessRole: 'reader'` または `'freeBusyReader'` のカレンダーは `readOnly: true` とマークされます。
+
+### イベントの読み込み
+
+現在表示されている日付範囲のイベントが読み込まれます。ユーザーが移動（週送り、月戻りなど）すると、新しい範囲のイベントが表示範囲変更リスナーを介して自動的に読み込まれます。
+
+### 増分同期
+
+初期ロード後、Google カレンダーの `syncToken` を使用して増分同期を行います。後続の同期では変更されたイベントのみがフェッチされます。`GoogleSyncStorage` が提供されている場合、同期トークンはページリロードをまたいで永続化されるため、次のセッションも増分的に開始されます。
+
+### 書き戻し
+
+`writable: true` の場合、ローカルイベントの変更（作成、更新、削除）は自動的に Google カレンダーに書き戻されます。
+
+- **作成**: `POST /calendars/{calendarId}/events`
+- **更新**: `PUT /calendars/{calendarId}/events/{eventId}` (`If-Match: <etag>` 付き)
+- **削除**: `DELETE /calendars/{calendarId}/events/{eventId}`
+
+更新が **412 Precondition Failed** (ETag 競合 — 他のデバイスでイベントが変更された) を返した場合、アダプターは自動的に最新の ETag を再フェッチし、一度だけ更新を再試行します。
+
+繰り返しイベントは**書き戻されません**（読み取り専用です）。
+
+## Google カレンダー API スコープ
+
+OAuth トークンには、少なくとも以下のスコープのいずれかが含まれている必要があります。
+
+| スコープ                                            | アクセス                                        |
+| :-------------------------------------------------- | :---------------------------------------------- |
+| `https://www.googleapis.com/auth/calendar`          | 完全な読み取り/書き込み権限                     |
+| `https://www.googleapis.com/auth/calendar.readonly` | 読み取り専用アクセス (`writable: false` と併用) |

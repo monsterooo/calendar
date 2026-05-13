@@ -1,0 +1,232 @@
+# @dayflow/outlook-sync
+
+`@dayflow/outlook-sync` 将 DayFlow 连接到 Microsoft Graph 日历 API。它是一个独立于 `@dayflow/caldav` 的包 —— 它直接使用 Microsoft Graph API。
+
+## 安装
+
+<PackageTabs pkg='@dayflow/outlook-sync' />
+
+## 快速开始
+
+```tsx
+import { useRef, useEffect, useState } from 'react';
+import {
+  DayFlowCalendar,
+  useCalendarApp,
+  createMonthView,
+} from '@dayflow/react';
+import {
+  attachOutlookSyncToDayFlow,
+  createOutlookSync,
+  createOutlookSyncAdapter,
+  type OutlookDayFlowController,
+  type OutlookSyncStatus,
+} from '@dayflow/outlook-sync';
+
+function MyCalendar() {
+  const calendar = useCalendarApp({
+    views: [createMonthView()],
+    calendars: [],
+    events: [],
+  });
+
+  const controllerRef = useRef<OutlookDayFlowController | null>(null);
+  const [syncStatus, setSyncStatus] = useState<OutlookSyncStatus>({
+    state: 'idle',
+  });
+
+  useEffect(() => {
+    if (controllerRef.current) return;
+
+    const adapter = createOutlookSyncAdapter({
+      baseUrl: '/api/outlook-calendar',
+    });
+
+    const sync = createOutlookSync(adapter);
+    const controller = attachOutlookSyncToDayFlow(calendar.app, sync, {
+      writable: true,
+      onStatusChange: setSyncStatus,
+      onWriteError: (error, ctx) =>
+        console.error(`[outlook-sync] ${ctx.action} 失败:`, error.message),
+      onSyncComplete: delta => {
+        console.log(
+          `同步完成: +${delta.events.added} ~${delta.events.updated} -${delta.events.deleted}`
+        );
+      },
+    });
+
+    controllerRef.current = controller;
+    controller.start();
+
+    return () => {
+      controller.stop();
+      controllerRef.current = null;
+    };
+  }, [calendar.app]);
+
+  return <DayFlowCalendar calendar={calendar} />;
+}
+```
+
+## 令牌注入
+
+### 使用 `getToken`（推荐用于客户端令牌）
+
+传递一个 `getToken` 工厂，以便适配器在每次请求之前获取一个新的令牌。这在使用管理令牌刷新的 MSAL 或其他身份验证库时非常理想：
+
+```ts
+import { PublicClientApplication } from '@azure/msal-browser';
+
+const msalInstance = new PublicClientApplication(msalConfig);
+
+const adapter = createOutlookSyncAdapter({
+  getToken: async () => {
+    const result = await msalInstance.acquireTokenSilent({
+      scopes: ['Calendars.ReadWrite'],
+    });
+    return result.accessToken;
+  },
+});
+```
+
+### 使用后端代理（推荐用于生产环境）
+
+将 OAuth 令牌保留在服务器上 —— 将所有 Graph API 请求通过代理路由：
+
+```ts
+const adapter = createOutlookSyncAdapter({
+  baseUrl: '/api/outlook-calendar',
+  // 不需要 getToken — 代理会注入 Authorization
+});
+```
+
+（中略：代理示例与英文文档相同）
+
+## 增量令牌持久化
+
+默认情况下，Outlook 同步令牌（delta 令牌）存储在内存中，在页面重新加载时丢失。提供一个 `OutlookSyncStorage` 实现以跨会话持久化它们：
+
+```ts
+import {
+  createOutlookSync,
+  type OutlookSyncStorage,
+} from '@dayflow/outlook-sync';
+
+const storage: OutlookSyncStorage = {
+  getDeltaToken: async calendarId =>
+    localStorage.getItem(`outlook-delta:${calendarId}`),
+  setDeltaToken: async (calendarId, token) =>
+    token
+      ? localStorage.setItem(`outlook-delta:${calendarId}`, token)
+      : localStorage.removeItem(`outlook-delta:${calendarId}`),
+};
+
+const sync = createOutlookSync(adapter, { storage });
+```
+
+通过 storage，每个会话开始时都会进行增量增量同步，而不是从头开始获取所有事件。
+
+## 本地缓存加载
+
+在第一次远程同步之前从本地存储中为 DayFlow 设定种子，以便日历立即呈现：
+
+```ts
+const controller = attachOutlookSyncToDayFlow(calendar.app, sync, {
+  getInitialSnapshot: async () => {
+    const { calendars, events } = await loadFromLocalDB();
+    return { calendars, events };
+  },
+  onSyncComplete: delta => {
+    saveChanges(delta);
+  },
+  onWriteComplete: (operation, event) => {
+    persistEvent(operation, event);
+  },
+});
+```
+
+## 手动应用远程快照
+
+对于自定义同步编排的应用，`applyRemoteSnapshot` 在不触发写回的情况下将一批远程事件应用到 DayFlow：
+
+```ts
+import { applyRemoteSnapshot, getOutlookMeta } from '@dayflow/outlook-sync';
+
+const delta = await applyRemoteSnapshot(
+  calendar.app,
+  { calendars, events },
+  {
+    isOwnedEvent: event => Boolean(getOutlookMeta(event)),
+    isOwnedCalendar: calendar => calendar.source === 'Outlook',
+    snapshotMode: 'authoritative',
+    resolveConflict: (remote, local) =>
+      mergeLocalEditsOntoRemote(remote, local),
+  }
+);
+```
+
+（中略：详细信息与英文文档相同）
+
+## 选项参考
+
+### `attachOutlookSyncToDayFlow` 选项
+
+| 选项                 | 类型                                   | 默认值          | 描述                                                  |
+| :------------------- | :------------------------------------- | :-------------- | :---------------------------------------------------- |
+| `writable`           | `boolean`                              | `true`          | 允许将本地更改写回 Outlook 日历。                     |
+| `onStatusChange`     | `(status: OutlookSyncStatus) => void`  | —               | 每当同步状态更改时调用。                              |
+| `onWriteError`       | `(error: Error, ctx) => void`          | `console.error` | 当写回失败时调用。`ctx` 包括 `action` 和 `eventId`。  |
+| `getInitialSnapshot` | `() => Promise<{ events, calendars }>` | —               | 在第一次远程同步之前从本地缓存中为 DayFlow 设定种子。 |
+| `onSyncComplete`     | `(delta: OutlookSyncDelta) => void`    | —               | 在每次成功同步后调用，包含更改计数。                  |
+| `onWriteComplete`    | `(operation, event) => void`           | —               | 在本地变更成功写回 Outlook 日历后调用。               |
+
+### `createOutlookSyncAdapter` 选项
+
+（中略：表项与英文相同）
+
+## 同步原理
+
+### 日历发现
+
+在 `controller.start()` 时，包获取用户的日历列表 (`GET /me/calendars`) 并将每个日历注册在 DayFlow 中。`canEdit` 为 `false` 的日历被标记为 `readOnly: true`。
+
+### 事件加载
+
+事件通过 Microsoft Graph 的 `calendarView/delta` 端点加载，带有 `startDateTime` 和 `endDateTime` 参数，这在时间窗口内展开重复事件。当用户导航时，新范围的事件会自动加载。
+
+### 带 Delta 令牌的增量同步
+
+初始加载后，Graph API 返回 `@odata.deltaLink`。在后续同步中，包跟踪此链接仅获取更改的事件 —— 而不是整个范围。提供 `OutlookSyncStorage` 时，Delta 令牌可以在页面重新加载时存活。
+
+如果 Delta 令牌过期（Graph 返回 `410 Gone`），包会自动回退到完全范围查询。
+
+### 写回
+
+当 `writable: true` 时，本地事件更改会写回 Outlook 日历：
+
+- **创建**: `POST /me/calendars/{calendarId}/events`
+- **更新**: `PATCH /me/calendars/{calendarId}/events/{eventId}` (`If-Match: <etag>` 付き)
+- **删除**: `DELETE /me/calendars/{calendarId}/events/{eventId}`
+
+如果更新返回 **412 Precondition Failed** (ETag 冲突)，包会重新获取最新的 ETag 并重试一次。
+
+重复事件**永不**写回 —— 它们是只读的。
+
+### 日历颜色
+
+Outlook 使用命名颜色（例如 `lightBlue`、`darkGreen`），而不是十六进制代码。该包将它们映射为近似的十六进制值，并通过 `getCalendarColorsForHex` 传递以实现一致的 DayFlow 主题。
+
+## Microsoft Graph API 范围
+
+您的 OAuth 令牌必须包含以下至少一个范围：
+
+| 范围                  | 访问权限                                  |
+| :-------------------- | :---------------------------------------- |
+| `Calendars.ReadWrite` | 完全读/写访问权限                         |
+| `Calendars.Read`      | 只读访问权限 (`writable: false` 一起使用) |
+
+对于应用（服务器到服务器）流程，请使用带有服务主体的 `.default` 范围：
+
+```
+https://graph.microsoft.com/.default
+```

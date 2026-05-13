@@ -26,6 +26,23 @@ export type ParsedRRule = {
   byDay?: number[];
 };
 
+export type RRuleExpansionOptions = {
+  /**
+   * Recurrence dates to exclude from the generated set. Values should already
+   * be parsed from EXDATE properties.
+   */
+  excludeDates?: Array<
+    Temporal.PlainDate | Temporal.PlainDateTime | Temporal.ZonedDateTime
+  >;
+  /**
+   * Extra recurrence dates from RDATE properties. Dates inside the requested
+   * range are added to the generated set.
+   */
+  includeDates?: Array<
+    Temporal.PlainDate | Temporal.PlainDateTime | Temporal.ZonedDateTime
+  >;
+};
+
 function parsePositiveInteger(value: string): number | null {
   if (!/^\d+$/.test(value)) return null;
   const parsed = Number.parseInt(value, 10);
@@ -162,6 +179,39 @@ function shiftDate(
   });
 }
 
+function toPlainDate(
+  value: Temporal.PlainDate | Temporal.PlainDateTime | Temporal.ZonedDateTime
+): Temporal.PlainDate {
+  return 'toPlainDate' in value
+    ? (value as Temporal.PlainDateTime | Temporal.ZonedDateTime).toPlainDate()
+    : (value as Temporal.PlainDate);
+}
+
+function recurrenceKey(
+  value: Temporal.PlainDate | Temporal.PlainDateTime | Temporal.ZonedDateTime
+): string {
+  if (!('hour' in value)) {
+    return value.toString();
+  }
+  if ('timeZoneId' in value) {
+    const zdt = value as Temporal.ZonedDateTime;
+    return `${zdt.toInstant().toString()}@${zdt.timeZoneId}`;
+  }
+  return value.toString();
+}
+
+function isWithinRange(
+  value: Temporal.PlainDate | Temporal.PlainDateTime | Temporal.ZonedDateTime,
+  rangeStart: Temporal.PlainDate,
+  rangeEnd: Temporal.PlainDate
+): boolean {
+  const date = toPlainDate(value);
+  return (
+    Temporal.PlainDate.compare(date, rangeStart) >= 0 &&
+    Temporal.PlainDate.compare(date, rangeEnd) < 0
+  );
+}
+
 /**
  * Expand a recurring event into occurrence dates within a range.
  *
@@ -183,22 +233,25 @@ export function expandRRule(
   rrule: string,
   dtstart: Temporal.PlainDate | Temporal.PlainDateTime | Temporal.ZonedDateTime,
   rangeStart: Temporal.PlainDate,
-  rangeEnd: Temporal.PlainDate
+  rangeEnd: Temporal.PlainDate,
+  options: RRuleExpansionOptions = {}
 ): Array<Temporal.PlainDate | Temporal.PlainDateTime | Temporal.ZonedDateTime> {
   const parsed = parseRRule(rrule);
   if (!parsed) return [];
 
   // Normalise dtstart to a PlainDate for iteration logic
-  const startDate =
-    'toPlainDate' in dtstart
-      ? (
-          dtstart as Temporal.PlainDateTime | Temporal.ZonedDateTime
-        ).toPlainDate()
-      : (dtstart as Temporal.PlainDate);
+  const startDate = toPlainDate(dtstart);
 
   const results: Array<
     Temporal.PlainDate | Temporal.PlainDateTime | Temporal.ZonedDateTime
   > = [];
+  const excluded = new Set((options.excludeDates ?? []).map(recurrenceKey));
+  const excludedDays = new Set(
+    (options.excludeDates ?? [])
+      .filter(value => !('hour' in value))
+      .map(value => (value as Temporal.PlainDate).toString())
+  );
+  const seen = new Set<string>();
   let occurrenceCount = 0;
   let iterCount = 0;
 
@@ -223,7 +276,13 @@ export function expandRRule(
       // Only include occurrences within the requested range
       if (Temporal.PlainDate.compare(current, rangeStart) >= 0) {
         // Reconstruct occurrence with the same time/timezone as dtstart
-        results.push(shiftDate(dtstart, current));
+        const shifted = shiftDate(dtstart, current);
+        const key = recurrenceKey(shifted);
+        const dayKey = toPlainDate(shifted).toString();
+        if (!excluded.has(key) && !excludedDays.has(dayKey) && !seen.has(key)) {
+          results.push(shifted);
+          seen.add(key);
+        }
       }
     }
 
@@ -235,5 +294,21 @@ export function expandRRule(
     }
   }
 
-  return results;
+  for (const included of options.includeDates ?? []) {
+    const key = recurrenceKey(included);
+    const dayKey = toPlainDate(included).toString();
+    if (
+      !excluded.has(key) &&
+      !excludedDays.has(dayKey) &&
+      !seen.has(key) &&
+      isWithinRange(included, rangeStart, rangeEnd)
+    ) {
+      results.push(included);
+      seen.add(key);
+    }
+  }
+
+  return results.toSorted((left, right) =>
+    Temporal.PlainDate.compare(toPlainDate(left), toPlainDate(right))
+  );
 }

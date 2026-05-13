@@ -42,11 +42,14 @@ const adapter = createCalDAVAdapter({
 const sync = createCalDAVSync({
   adapter,
   storage,
+  // Optional: split broad visible-range REPORTs into smaller windows.
+  rangeChunkDays: 31,
 });
 
 const controller = attachCalDAVToDayFlow(calendar.app, sync, {
   writable: true,
   refreshOnVisibleRangeChange: true,
+  maxConcurrentCalendars: 4,
   createEventId: createNamespacedCalDAVEventId,
   eventMode: {
     recurring: 'read-only',
@@ -114,8 +117,9 @@ Options:
 
 - `adapter`: a `CalDAVAdapter`.
 - `storage`: a `CalDAVStorage`.
+- `rangeChunkDays`: optional day window size for broad visible-range syncs.
 
-The sync engine stores etags, event sync state, and sync tokens. It does not own `start`, `stop`, app subscriptions, UI state, or credentials.
+The sync engine stores etags, event sync state, sync tokens, and calendar ctags. It does not own `start`, `stop`, app subscriptions, UI state, or credentials.
 
 ### attachCalDAVToDayFlow(app, sync, options)
 
@@ -125,6 +129,7 @@ Options:
 
 - `writable`: allow eligible local changes to write back to CalDAV.
 - `refreshOnVisibleRangeChange`: sync when the user navigates to a new range.
+- `maxConcurrentCalendars`: number of remote calendars to sync in parallel.
 - `eventMode.recurring`: currently `read-only`.
 - `onError`: receives sync/write errors with operation context.
 - `createEventId`: build DayFlow ids for remote CalDAV events. The binding
@@ -165,9 +170,27 @@ interface CalDAVStorage {
 
 Storage should contain sync metadata only. Do not store credentials here.
 
+## Snapshot Safety
+
+`applyRemoteSnapshot` treats snapshots as partial by default, so missing local
+records are preserved unless you explicitly opt into deletion. Use
+`snapshotMode: 'authoritative'` only when the snapshot fully represents all
+provider-owned calendars and events:
+
+```ts
+await applyRemoteSnapshot(app, fullProviderSnapshot, {
+  isOwnedEvent,
+  isOwnedCalendar,
+  snapshotMode: 'authoritative',
+});
+```
+
+For visible-range, filtered, or paginated responses, keep the default partial
+mode or pass `deleteMissingEvents: false` / `deleteMissingCalendars: false`.
+
 ## Current Limits
 
-- Recurring events are detected and treated as read-only.
-- RRULE expansion utilities support basic `DAILY`, `WEEKLY`, `MONTHLY`, and `YEARLY` rules, but recurrence exception editing is not supported yet.
+- Recurring events are detected and treated as read-only for write-back.
+- RRULE expansion utilities support basic `DAILY`, `WEEKLY`, `MONTHLY`, and `YEARLY` rules plus `RDATE`/`EXDATE` include/exclude dates, but recurrence exception editing is not supported yet.
 - `sync-token` support is collection-wide. Visible-range loading uses range queries so unchanged events in newly visible ranges are not skipped.
-- `ctag` storage exists, but full ctag pre-flight optimization is deferred.
+- Calendar `ctag` values are used as a safe collection-wide no-op optimization when available.

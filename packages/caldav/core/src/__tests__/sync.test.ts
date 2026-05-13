@@ -127,8 +127,13 @@ function makeStorage() {
       }
       return Promise.resolve();
     }),
-    getCtag: jest.fn(() => Promise.resolve(null)),
-    setCtag: jest.fn(() => Promise.resolve()),
+    getCtag: jest.fn((id: string) =>
+      Promise.resolve(store.get(`ct:${id}`) ?? null)
+    ),
+    setCtag: jest.fn((id: string, ctag: string) => {
+      store.set(`ct:${id}`, ctag);
+      return Promise.resolve();
+    }),
     getEtag: jest.fn((href: string) =>
       Promise.resolve(store.get(`et:${href}`) ?? null)
     ),
@@ -262,8 +267,72 @@ describe('createCalDAVSync', () => {
     expect(adapter.syncEvents).toHaveBeenLastCalledWith({
       calendarId: CAL_ID,
       range,
-      syncToken: undefined,
     });
+  });
+
+  it('skips collection-wide sync when ctag is unchanged', async () => {
+    const adapter = makeAdapter();
+    adapter.listCalendars.mockResolvedValueOnce([
+      { ...REMOTE_CALENDAR, ctag: 'ctag-1' },
+    ]);
+    const storage = makeStorage();
+    await storage.setCtag(CAL_ID, 'ctag-1');
+    storage.setCtag.mockClear();
+    const engine = createCalDAVSync({ adapter, storage: storage as never });
+
+    await engine.listCalendars();
+    const result = await engine.syncEvents({ calendarId: CAL_ID });
+
+    expect(result).toEqual({ events: [], deleted: [] });
+    expect(adapter.syncEvents).not.toHaveBeenCalled();
+  });
+
+  it('splits range sync into chunks and de-duplicates by href', async () => {
+    const adapter = makeAdapter();
+    adapter.syncEvents
+      .mockResolvedValueOnce({
+        events: [makeRemoteEventData()],
+        deleted: [],
+      })
+      .mockResolvedValueOnce({
+        events: [
+          makeRemoteEventData({
+            uid: 'event2@test',
+            href: `${CAL_ID}event2.ics`,
+            icalData: [
+              'BEGIN:VCALENDAR\r\nVERSION:2.0',
+              'BEGIN:VEVENT',
+              'UID:event2@test',
+              'SUMMARY:Second',
+              'DTSTART:20250120T100000Z',
+              'DTEND:20250120T110000Z',
+              'END:VEVENT',
+              'END:VCALENDAR',
+            ].join('\r\n'),
+          }),
+          makeRemoteEventData(),
+        ],
+        deleted: [],
+      });
+    const engine = createCalDAVSync({
+      adapter,
+      storage: makeStorage() as never,
+      rangeChunkDays: 7,
+    });
+
+    const result = await engine.syncEvents({
+      calendarId: CAL_ID,
+      range: {
+        start: new Date('2025-01-01T00:00:00Z'),
+        end: new Date('2025-01-15T00:00:00Z'),
+      },
+    });
+
+    expect(adapter.syncEvents).toHaveBeenCalledTimes(2);
+    expect(result.events.map(event => event.href).toSorted()).toEqual([
+      EVENT_HREF,
+      `${CAL_ID}event2.ics`,
+    ]);
   });
 
   it('stores new sync token returned by adapter', async () => {

@@ -319,3 +319,50 @@ describe('expandRRule – timed events', () => {
     ).toHaveLength(0);
   });
 });
+
+describe('expandRRule – RDATE and EXDATE', () => {
+  it('excludes generated occurrences and includes extra dates', () => {
+    const dtstart = Temporal.PlainDate.from('2025-01-01');
+    const rangeStart = Temporal.PlainDate.from('2025-01-01');
+    const rangeEnd = Temporal.PlainDate.from('2025-01-20');
+
+    const occurrences = expandRRule(
+      'FREQ=WEEKLY',
+      dtstart,
+      rangeStart,
+      rangeEnd,
+      {
+        excludeDates: [Temporal.PlainDate.from('2025-01-08')],
+        includeDates: [Temporal.PlainDate.from('2025-01-10')],
+      }
+    );
+
+    expect(
+      (occurrences as Temporal.PlainDate[]).map(d => d.toString())
+    ).toEqual(['2025-01-01', '2025-01-10', '2025-01-15']);
+  });
+
+  it('allows all-day EXDATE values to exclude timed occurrences by date', () => {
+    const dtstart = Temporal.ZonedDateTime.from(
+      '2025-01-01T09:00:00+11:00[Australia/Sydney]'
+    );
+    const rangeStart = Temporal.PlainDate.from('2025-01-01');
+    const rangeEnd = Temporal.PlainDate.from('2025-01-20');
+
+    const occurrences = expandRRule(
+      'FREQ=WEEKLY',
+      dtstart,
+      rangeStart,
+      rangeEnd,
+      {
+        excludeDates: [Temporal.PlainDate.from('2025-01-08')],
+      }
+    );
+
+    expect(
+      (occurrences as Temporal.ZonedDateTime[]).map(d =>
+        d.toPlainDate().toString()
+      )
+    ).toEqual(['2025-01-01', '2025-01-15']);
+  });
+});

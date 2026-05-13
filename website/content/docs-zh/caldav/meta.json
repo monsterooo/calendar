@@ -1,5 +1,5 @@
 {
-  "title": "CalDAV & Sync",
+  "title": "CalDAV & 同步",
   "defaultOpen": true,
   "pages": ["overview", "caldav", "google-sync", "outlook-sync", "sync-core"]
 }
