@@ -1,5 +1,6 @@
 packages:
   - 'packages/*'
+  - 'packages/caldav/*'
   - 'packages/plugins/*'
   - 'packages/ui/*'
   # - 'website'

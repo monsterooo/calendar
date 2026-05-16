@@ -82,6 +82,9 @@
     "jsdoc/require-returns-type": "off",
 
     "unicorn/explicit-length-check": "off",
+    "no-explicit-any": "off",
+    "no-relative-parent-imports": "off",
+    "require-await": "off",
     "unicorn/no-array-callback-reference": "off",
     "unicorn/no-process-exit": "off",
     "unicorn/prefer-global-this": "off",
