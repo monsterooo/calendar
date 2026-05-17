@@ -4,13 +4,16 @@
 
 ## 文档列表
 
-| 文档                                 | 说明                                                    |
-| ------------------------------------ | ------------------------------------------------------- |
-| [architecture.md](./architecture.md) | 整体架构概览、分层设计、技术选型、设计模式              |
-| [modules.md](./modules.md)           | 9 大模块的详细职责、关键文件、核心接口说明              |
-| [data-flow.md](./data-flow.md)       | 数据流图、事件创建/修改/搜索的完整调用链                |
-| [types.md](./types.md)               | TypeScript 类型体系完整参考                             |
-| [api.md](./api.md)                   | 公开 API 参考（ICalendarApp、工厂函数、工具函数、插件） |
+| 文档                                                     | 说明                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------- |
+| [reading-guide.md](./reading-guide.md)                   | **源码阅读路径**（推荐从零开始时先读这里）              |
+| [architecture.md](./architecture.md)                     | 整体架构概览、分层设计、技术选型、设计模式              |
+| [modules.md](./modules.md)                               | 9 大模块的详细职责、关键文件、核心接口说明              |
+| [data-flow.md](./data-flow.md)                           | 数据流图、事件创建/修改/搜索的完整调用链                |
+| [data-structures.md](./data-structures.md)               | 底层数据结构详解（Event、布局、拖拽、渲染插槽等）       |
+| [event-layout-algorithm.md](./event-layout-algorithm.md) | 事件布局算法深度解析（分组→嵌套树→位置计算）            |
+| [types.md](./types.md)                                   | TypeScript 类型体系完整参考                             |
+| [api.md](./api.md)                                       | 公开 API 参考（ICalendarApp、工厂函数、工具函数、插件） |
 
 ## 快速上手
 
