@@ -364,7 +364,6 @@ export const CalendarRoot = ({
                 <div className='df-calendar-view-container'>
                   <ViewComponent {...viewProps} />
                 </div>
-
                 <SearchDrawer
                   isOpen={search.isSearchOpen}
                   onClose={search.handleSearchClose}
@@ -390,14 +389,12 @@ export const CalendarRoot = ({
               />
             </div>
           </div>
-
           <QuickCreateEventPopup
             app={app}
             anchorRef={quickCreate.quickCreateAnchorRef}
             isOpen={quickCreate.isQuickCreateOpen}
             onClose={() => quickCreate.setIsQuickCreateOpen(false)}
           />
-
           <ContentSlot
             store={customRenderingStore}
             generatorName='mobileEventDetail'
