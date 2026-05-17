@@ -23,10 +23,12 @@ export interface Event {
   icon?: boolean | ComponentChildren;
 
   // Calendar type reference
+  // 一个时间可以属于单个日历
   calendarId?: string;
   /** Multi-calendar support: list of calendar IDs this event belongs to.
    *  When present, takes precedence over calendarId for visibility and color rendering.
    *  The event is visible as long as at least one listed calendar is visible. */
+  // 该字段的颜色和可见性的渲染优先于 calendarId
   calendarIds?: string[];
 
   meta?: Record<string, unknown>;
@@ -34,7 +36,9 @@ export interface Event {
   // Internal use fields (for rendering and layout calculation)
   day?: number;
   /** Original start hour (used for stable cross-day layout) */
+  // 用于跨天的时间布局判断，还需要详细查看是怎样的逻辑
   _originalStartHour?: number;
   /** Original end hour (used for stable cross-day layout) */
+  // 用于跨天的时间布局判断，还需要详细查看是怎样的逻辑
   _originalEndHour?: number;
 }
