@@ -73,10 +73,13 @@ export function startPendingCreate(
 
       // In sliding-view mode, once we have enough movement to determine intent,
       // check direction: horizontal dominance means swipe-to-navigate, not create.
+      // 在滑动视图模式下，一旦移动距离足以判断用户意图，
+      // 则检查方向：若水平方向位移占主导，则视为滑动导航，而非创建事件。
       if (isSlidingView && Math.abs(dx) >= Math.abs(dy)) return;
 
       handleCreateStart?.(e, dayIndex, hour);
       // Sync indicator to current cursor before the first render frame.
+      // 在第一帧渲染前，将指示器同步到当前光标位置。
       document.dispatchEvent(
         new MouseEvent('mousemove', {
           clientX: moveEvent.clientX,
