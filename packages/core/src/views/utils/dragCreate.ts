@@ -30,6 +30,18 @@ const DRAG_CREATE_THRESHOLD = 5;
  * the drag indicator to the actual cursor position, eliminating the brief
  * 1-hour flash that would otherwise appear on the first frame.
  */
+/**
+ * 在鼠标按下时启动一个待处理的拖拽创建交互。
+ *
+ * 附加临时的文档级监听器，仅在光标移动距离 ≥ DRAG_CREATE_THRESHOLD 像素后
+ * 才调用 `handleCreateStart`，因此单纯的点击操作不会创建事件。
+ *
+ * 在滑动视图模式下（窄桌面窗口中的周视图），以水平方向为主的拖拽会取消
+ * 待处理的创建操作而不触发它，转由滑动导航处理器接管。
+ *
+ * 此外，在激活后立即派发一个合成的 mousemove 事件，以将拖拽指示器同步到
+ * 实际光标位置，消除原本在第一帧出现的短暂 1 小时闪烁问题。
+ */
 export function startPendingCreate(
   e: MouseEvent,
   dayIndex: number,
@@ -44,6 +56,8 @@ export function startPendingCreate(
 
   // Store handlers on an object so each handler can reference the other via
   // property lookup at call-time, avoiding circular forward-reference errors.
+  // 将处理函数存储在一个对象上，这样每个处理函数都可以在调用时通过属性查找
+  // 来引用其他处理函数，从而避免循环前向引用错误。
   const handlers = {
     move(moveEvent: MouseEvent) {
       if (!active) return;

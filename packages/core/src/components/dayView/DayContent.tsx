@@ -182,6 +182,7 @@ export const DayContent = ({
 
   // Measure offset from .df-calendar-content top to the first time grid row,
   // accounting for boundary elements above the grid
+  // 第一个时间元素顶部到容器顶部的位置
   const getGridOffset = () => {
     const content = calendarRef.current?.querySelector('.df-calendar-content');
     if (!content) return 0;
@@ -195,6 +196,7 @@ export const DayContent = ({
   };
 
   /** Returns the fractional hour at the given clientY, or null if the ref is unavailable. */
+  // 根据点击的Y轴位置获取小时
   const getClickedHour = (clientY: number): number | null => {
     const content = calendarRef.current?.querySelector('.df-calendar-content');
     if (!content) return null;
@@ -466,6 +468,7 @@ export const DayContent = ({
             </div>
 
             {/* Time grid */}
+            {/* Day 时间块渲染元素 */}
             <div className='df-day-content-grid-column'>
               {/* Top boundary — height must match time column spacer */}
               <div
@@ -507,6 +510,7 @@ export const DayContent = ({
                 }}
               >
                 {timeSlots.map((_slot, slotIndex) => (
+                  // 渲染时间轴占位符，拖动的区域
                   <div
                     key={slotIndex}
                     className={timeGridRow}
@@ -516,11 +520,13 @@ export const DayContent = ({
                     onClick={() => onDateChange?.(currentDate)}
                     onMouseDown={e => {
                       const hour = getClickedHour(e.clientY);
+                      console.log('小时：', hour);
                       if (hour === null) return;
                       const dayIndex = Math.floor(
                         (currentDate.getTime() - currentWeekStart.getTime()) /
                           (24 * 60 * 60 * 1000)
                       );
+                      console.log('天索引：', dayIndex);
                       startPendingCreate(
                         e,
                         dayIndex,
